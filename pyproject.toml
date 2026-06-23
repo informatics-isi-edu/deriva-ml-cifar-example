@@ -1,0 +1,104 @@
+
+[project]
+name = "deriva-ml-cifar-example"
+dynamic = ["version"]
+authors = [
+    {name = "ISRD", email = "isrd-dev@isi.edu"},
+]
+description = "CIFAR-10 reference example for DerivaML, built on the deriva-ml-model-template skeleton."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+keywords = ["deriva-ml"]
+
+dependencies = [
+    # Change this to be the module with the domain specific class derived from deriva-ml.
+    # Pinned to >=1.42 — v1.42.0 adds the ``subsample()`` primitive and
+    # the ``Split_Partition`` Dataset_Type tag (deriva-ml PR #275; design
+    # spec 2026-06-01-split-partition-tag-and-subsample-design.md). The
+    # CIFAR-10 hierarchy below relies on both. v1.39 carried the unified
+    # Execution.commit_output_assets surface (ADR-0009); v2.0.0 was
+    # walked back by the maintainer (same commit, re-tagged as v1.39.0).
+    "deriva-ml>=1.42,<2.0",
+    "notebook>=7.4.7",
+    "torchvision",
+    # For ROC analysis notebook
+    "pandas",
+    "matplotlib",
+    "scikit-learn",
+    "ipykernel>=7.1.0",
+]
+
+[project.scripts]
+load-cifar10 = "scripts.load_cifar10:main"
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "pytest-coverage",
+    "ruff",
+    "ipython",
+    "pip-system-certs",
+]
+
+docker = [
+    "pip-system-certs"
+]
+
+jupyter = ["ipykernel", "jupyter"]  # optional extras for local dev
+docs = ["mkdocs", "mkdocs-material"]  # for building documentation
+torch = ["torch", "torchvision"]
+tensorflow = [
+    # On macOS + ARM64 → TensorFlow-Metal support
+    "tensorflow-macos; platform_system == 'Darwin' and platform_machine == 'arm64'",
+    "tensorflow-metal; platform_system == 'Darwin' and platform_machine == 'arm64'",
+
+    # On all other platforms → regular TensorFlow
+    "tensorflow; platform_system != 'Darwin' or platform_machine != 'arm64'",
+]
+
+
+[tool.uv]
+python-preference = "only-managed"
+default-groups = ["dev", "jupyter"]
+package = true
+
+[tool.uv.pip]
+torch-backend = "auto"
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+# Update this for whatever version of CUDA you are using.
+name = "pytorch-cuda"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
+
+[tool.uv.sources]
+deriva-ml = { git = "https://github.com/informatics-isi-edu/deriva-ml.git" }
+   # torch = [
+   #     { index = "pytorch-cpu", marker = "(sys_platform == 'darwin' and platform_machine == 'arm64') or (platform_machine != 'x86_64' and sys_platform == 'Linux')"},
+   #     { index = "pytorch-cuda", marker = "sys_platform == 'Linux' and platform_machine == 'x86_64'"}
+   # ]
+
+[tool.setuptools_scm]
+version_scheme = "post-release"
+
+[tool.bumpversion]
+parse = "(?P<major>\\d+)\\.(?P<minor>\\d+)\\.(?P<patch>\\d+)"
+serialize = ["{major}.{minor}.{patch}"]
+search = "{current_version}"
+replace = "{new_version}"
+tag = true
+tag_name = "v{new_version}"
+tag_message = "Bump version: {current_version} → {new_version}"
+allow_dirty = false
+message = "Bump version: {current_version} → {new_version}"
+post_commit_hooks = ["git push", "git push --tags"]
+
+[build-system]
+requires = ["setuptools>=45", "setuptools_scm[toml]>=6.2", "wheel"]
+build-backend = "setuptools.build_meta"

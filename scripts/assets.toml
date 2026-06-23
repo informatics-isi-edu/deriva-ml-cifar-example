@@ -1,0 +1,15 @@
+# Asset file manifest for upload_assets.py
+#
+# Maps filenames to descriptions. Add new entries here when you have
+# additional files to upload.
+#
+# Usage:
+#   uv run python scripts/upload_assets.py              # upload all
+#   uv run python scripts/upload_assets.py --dry-run    # preview
+
+[files]
+
+# Example:
+# "model_weights.pth" = """\
+# Pre-trained model weights for CIFAR-10 CNN. \
+# Trained for 50 epochs with dropout and weight decay."""

@@ -1,0 +1,35 @@
+site_name: DerivaML Model Template
+site_url: https://informatics-isi-edu.github.io/deriva-ml-model-template
+theme:
+  name: material
+  features:
+    - navigation.instant
+    - navigation.expand
+    - navigation.footer
+  palette:
+    scheme: slate
+    primary: black
+    accent: blue
+
+plugins:
+  - search
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Quick Start: getting-started/quick-start.md
+      - Environment Setup: getting-started/environment-setup.md
+      - Creating a New Model: getting-started/creating-models.md
+      - Creating a New Notebook: getting-started/creating-notebooks.md
+  - Configuration Guide:
+      - Overview: configuration/overview.md
+      - Configuration Groups: configuration/groups.md
+      - Notebook Configuration: configuration/notebooks.md
+      - Experiments: configuration/experiments.md
+  - Workflow Guide:
+      - Git Workflow: workflow/git.md
+      - Versioning: workflow/versioning.md
+      - Running Experiments: workflow/experiments.md
+  - Reference:
+      - Coding Guidelines: reference/coding-guidelines.md
+      - CIFAR-10 Example: reference/cifar10-example.md
