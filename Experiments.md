@@ -10,6 +10,8 @@ in sync with `src/configs/experiments.py` and `src/configs/multiruns.py`.
 | `cifar10_quick` | `cifar10_quick` | `cifar10_small_labeled_split` | 3 epochs, fast validation |
 | `cifar10_default` | `default_model` | `cifar10_small_training` | 10 epochs, standard |
 | `cifar10_extended` | `cifar10_extended` | `cifar10_small_labeled_split` | 50 epochs, best accuracy |
+| `cifar10_small_default` | `default_model` | `cifar10_small_labeled_split` | 10 epochs, capacity-sweep middle |
+| `cifar10_small_large` | `cifar10_large` | `cifar10_small_labeled_split` | 20 epochs, capacity-sweep high end |
 | `cifar10_quick_full` | `cifar10_quick` | `cifar10_labeled_split` | 3 epochs, full dataset |
 | `cifar10_extended_full` | `cifar10_extended` | `cifar10_labeled_split` | 50 epochs, full dataset |
 | `cifar10_test_only` | `cifar10_test_only` | `cifar10_small_labeled_testing` | Inference only |
@@ -45,6 +47,18 @@ in sync with `src/configs/experiments.py` and `src/configs/multiruns.py`.
 - **Config group overrides**: `model_config=cifar10_extended`, `datasets=cifar10_small_labeled_split`
 - **Parameters**: 50 epochs, 64->128 channels, dropout 0.25, weight decay 1e-4
 - **Purpose**: Best accuracy, production-quality training
+
+### `cifar10_small_default`
+
+- **Config group overrides**: `model_config=default_model`, `datasets=cifar10_small_labeled_split`
+- **Parameters**: 10 epochs, 32->64 channels, batch 64, lr=1e-3
+- **Purpose**: Middle point of the capacity sweep on the small labeled split (same dataset/seed as `cifar10_quick` and `cifar10_small_large`, varying only model capacity)
+
+### `cifar10_small_large`
+
+- **Config group overrides**: `model_config=cifar10_large`, `datasets=cifar10_small_labeled_split`
+- **Parameters**: 20 epochs, 64->128 channels, 256 hidden units
+- **Purpose**: High end of the capacity sweep on the small labeled split — directly comparable to `cifar10_quick` and `cifar10_small_default` (same dataset, same held-out test partition)
 
 ### `cifar10_quick_full`
 
