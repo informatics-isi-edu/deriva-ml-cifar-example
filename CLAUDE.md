@@ -158,9 +158,9 @@ uv run deriva-ml-run dry_run=true        # dry run (no catalog writes)
   variant of "let's do an e2e run", "exercise the stack", or
   "test the platform"), the current plan of record is
   [docs/test-plans/2026-05-20-e2e-multipersona.md](docs/test-plans/2026-05-20-e2e-multipersona.md).
-  Read it before kicking off the run. The prior single-agent
-  platform-fitness plan (May 2026) is superseded but kept in
-  `docs/superpowers/specs/` for historical reference.
+  Read it before kicking off the run. (A prior single-agent
+  platform-fitness plan from May 2026 was superseded and has since
+  been removed.)
 
 - **Don't tear down the e2e worktree at wrap-up.** After the
   Analyst arc commits and the evaluation report lands, push the

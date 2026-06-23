@@ -57,11 +57,11 @@ confusion-matrix work. No multi-run comparison required.
 
 ## Upstream designs
 
-- **Model design:** `cifar10-2layer-cnn` *(not yet authored — model_config
+- **Model design:** `cifar10-2layer-cnn` *(now authored — model_config
   `cifar10_test_only`: same architecture, `test_only=True`, loads
   `cifar10_cnn_weights.pt`)*.
-- **Dataset design:** `cifar10-small-labeled-testing` *(not yet authored —
-  labeled test partition only)*.
+- **Dataset design:** `cifar10-small-labeled-testing` *(now authored — labeled
+  test partition only; see `cifar10-input-datasets`)*.
 - **Asset precondition:** a trained-weights asset (produced by one of the
   training experiments above) — not a design doc, but a hard input dependency.
 

@@ -2,7 +2,7 @@
 
 **Author:** Carl Kesselman (with Claude)
 **Date:** 2026-05-20
-**Supersedes:** `docs/superpowers/specs/2026-05-13-e2e-platform-test-design.md`
+**Supersedes:** the prior single-agent e2e platform-test design (2026-05-13; since removed)
 **Status:** Approved for execution.
 
 ---

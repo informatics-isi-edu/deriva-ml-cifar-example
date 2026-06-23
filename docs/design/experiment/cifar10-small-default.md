@@ -54,9 +54,9 @@ against test accuracy. This experiment is the **middle** point.
 
 ## Upstream designs
 
-- **Model design:** `cifar10-2layer-cnn` *(not yet authored — model_config
+- **Model design:** `cifar10-2layer-cnn` *(now authored — model_config
   `default_model`: 32→64 ch, 128 hidden, dropout 0.0, lr 1e-3, 10 epochs, batch 64)*.
-- **Dataset design:** `cifar10-small-labeled-split` *(not yet authored)*.
+- **Dataset design:** `cifar10-small-labeled-split` (now authored).
 
 ## Status & links
 

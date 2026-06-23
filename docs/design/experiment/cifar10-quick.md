@@ -55,9 +55,9 @@ pipeline validation.
 
 ## Upstream designs
 
-- **Model design:** `cifar10-2layer-cnn` *(not yet authored — model_config
+- **Model design:** `cifar10-2layer-cnn` *(now authored — model_config
   `cifar10_quick`: 32→64 ch, 128 hidden, dropout 0.0, lr 1e-3, 3 epochs, batch 128)*.
-- **Dataset design:** `cifar10-small-labeled-split` *(not yet authored — the
+- **Dataset design:** `cifar10-small-labeled-split` *(now authored — the
   small, leak-free, both-partitions-labeled split)*.
 
 ## Status & links

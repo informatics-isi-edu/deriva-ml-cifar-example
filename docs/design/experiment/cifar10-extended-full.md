@@ -53,10 +53,10 @@ capacity/epochs at full data scale) and against small-split `cifar10_extended`
 
 ## Upstream designs
 
-- **Model design:** `cifar10-2layer-cnn` *(not yet authored — model_config
+- **Model design:** `cifar10-2layer-cnn` *(now authored — model_config
   `cifar10_extended`: 64→128 ch, 256 hidden, dropout 0.25, wd 1e-4, lr 1e-3,
   50 epochs, batch 64)*.
-- **Dataset design:** `cifar10-labeled-split` *(not yet authored — full split)*.
+- **Dataset design:** `cifar10-labeled-split` *(now authored — full split)*.
 
 ## Status & links
 
