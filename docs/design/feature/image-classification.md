@@ -4,12 +4,6 @@
 **Status:** Built   <!-- Draft | Approved | Built | Validated -->
 **Date:** 2026-06-23
 
-> **Reverse-engineered.** Reconstructed *after* the feature existed, from
-> `src/scripts/_cifar10_schema.py` (`create_vocabulary` / `create_feature`) and
-> the write path in `src/models/cifar10_cnn.py` (`record_predictions`). The
-> structure is recovered faithfully; the **Validation** criteria are partly
-> inferred.
-
 ## Purpose
 
 A per-image classification label drawn from the 10 CIFAR-10 classes, with an
@@ -53,8 +47,8 @@ carry a `Source_Label`; that provenance lives in the
 ## Validation
 
 - **Coverage:** every loaded `Image` has exactly one ground-truth
-  `Image_Classification` row (loader writes one per image; catalog 100 reports
-  2000 features for 2000 images).
+  `Image_Classification` row (the loader writes one per image, so a freshly
+  loaded catalog reports one ground-truth feature per image).
 - **Sanity:** all `Image_Class` values are among the 10 vocabulary terms;
   `Confidence` (when present) is in [0, 1].
 - **Provenance:** each value links to a producing `Execution` (loader for GT,

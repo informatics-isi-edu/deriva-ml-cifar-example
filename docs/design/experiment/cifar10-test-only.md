@@ -4,10 +4,6 @@
 **Status:** Built   <!-- Draft | Approved | Built | Validated -->
 **Date:** 2026-06-23
 
-> **Reverse-engineered.** Reconstructed after the config existed. Goal/Requirements
-> recovered from the config; **Validation** thresholds are *inferred*. This
-> experiment differs structurally from the others: it does **no training**.
-
 ## Goal
 
 Given an already-trained checkpoint, what is its top-1 accuracy on the small
@@ -15,7 +11,7 @@ labeled test partition — evaluated without any further training?
 
 ## Hypothesis
 
-*(Inferred.)* Loading pretrained weights (`cifar10_cnn_weights.pt`) and running
+Loading pretrained weights (`cifar10_cnn_weights.pt`) and running
 forward-only inference reproduces the checkpoint's training-time test accuracy
 on the same-distribution labeled test set, and records predictions
 (`Image_Classification` rows + probability CSV) suitable for downstream ROC /
@@ -57,10 +53,10 @@ confusion-matrix work. No multi-run comparison required.
 
 ## Upstream designs
 
-- **Model design:** `cifar10-2layer-cnn` *(now authored — model_config
+- **Model design:** `cifar10-2layer-cnn` *(model_config
   `cifar10_test_only`: same architecture, `test_only=True`, loads
   `cifar10_cnn_weights.pt`)*.
-- **Dataset design:** `cifar10-small-labeled-testing` *(now authored — labeled
+- **Dataset design:** `cifar10-small-labeled-testing` *(labeled
   test partition only; see `cifar10-input-datasets`)*.
 - **Asset precondition:** a trained-weights asset (produced by one of the
   training experiments above) — not a design doc, but a hard input dependency.

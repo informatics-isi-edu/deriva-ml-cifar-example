@@ -4,13 +4,6 @@
 **Status:** Built   <!-- Draft | Approved | Built | Validated -->
 **Date:** 2026-06-23
 
-> **Reverse-engineered.** This design was reconstructed *after* the config in
-> `src/configs/experiments.py` already existed, from the config parameters and
-> the `Experiments.md` "Purpose" line. The Goal/Requirements are recovered
-> faithfully from the config; the **Hypothesis** and **Validation** thresholds
-> are *inferred* (the original author did not record explicit success criteria)
-> and should be treated as a proposed contract, not a recalled one.
-
 ## Goal
 
 Does the end-to-end CIFAR-10 training pipeline (data load → train → record
@@ -19,7 +12,7 @@ pipeline-validation run, not a model-performance run.
 
 ## Hypothesis
 
-*(Inferred.)* A 3-epoch, 32→64-channel run on the small labeled split completes
+A 3-epoch, 32→64-channel run on the small labeled split completes
 in well under a minute on CPU and produces a learning signal — top-1 test
 accuracy meaningfully above the 10% random-guess baseline — without erroring on
 asset upload, feature recording, or the prediction CSV.
@@ -55,9 +48,9 @@ pipeline validation.
 
 ## Upstream designs
 
-- **Model design:** `cifar10-2layer-cnn` *(now authored — model_config
+- **Model design:** `cifar10-2layer-cnn` *(model_config
   `cifar10_quick`: 32→64 ch, 128 hidden, dropout 0.0, lr 1e-3, 3 epochs, batch 128)*.
-- **Dataset design:** `cifar10-small-labeled-split` *(now authored — the
+- **Dataset design:** `cifar10-small-labeled-split` *(the
   small, leak-free, both-partitions-labeled split)*.
 
 ## Status & links

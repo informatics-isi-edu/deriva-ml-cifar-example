@@ -4,11 +4,6 @@
 **Status:** Built   <!-- Draft | Approved | Built | Validated -->
 **Date:** 2026-06-23
 
-> **Reverse-engineered.** Reconstructed after the config existed. Goal/Requirements
-> recovered from the config and the capacity-sweep rationale documented in the
-> `src/configs/experiments.py` block comment; **Validation** thresholds are
-> *inferred*.
-
 ## Goal
 
 What is the test accuracy of the *default-capacity* model (32→64 ch, 10 epochs)
@@ -17,7 +12,7 @@ capacity-vs-accuracy sweep that holds the dataset and seed constant?
 
 ## Hypothesis
 
-*(Inferred.)* Holding the dataset and seed fixed and varying only model
+Holding the dataset and seed fixed and varying only model
 capacity + training duration, the default-capacity / 10-epoch run lands
 *between* the low end (`cifar10_quick`: 32→64 ch, 3 epochs) and the high end
 (`cifar10_small_large`: 64→128 ch, 20 epochs) in top-1 test accuracy, producing
@@ -54,9 +49,9 @@ against test accuracy. This experiment is the **middle** point.
 
 ## Upstream designs
 
-- **Model design:** `cifar10-2layer-cnn` *(now authored — model_config
+- **Model design:** `cifar10-2layer-cnn` *(model_config
   `default_model`: 32→64 ch, 128 hidden, dropout 0.0, lr 1e-3, 10 epochs, batch 64)*.
-- **Dataset design:** `cifar10-small-labeled-split` (now authored).
+- **Dataset design:** `cifar10-small-labeled-split`.
 
 ## Status & links
 

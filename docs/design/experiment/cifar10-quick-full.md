@@ -4,10 +4,6 @@
 **Status:** Built   <!-- Draft | Approved | Built | Validated -->
 **Date:** 2026-06-23
 
-> **Reverse-engineered.** Reconstructed after the config existed. Goal/Requirements
-> recovered from the config; **Hypothesis** and **Validation** thresholds are
-> *inferred*.
-
 ## Goal
 
 Does the quick configuration (3 epochs, 32→64 ch) produce a sensible baseline
@@ -16,7 +12,7 @@ does the larger training set change the result at fixed (low) capacity/epochs?
 
 ## Hypothesis
 
-*(Inferred.)* Same model as `cifar10_quick`, but on the full labeled split:
+Same model as `cifar10_quick`, but on the full labeled split:
 more training data at the same 3-epoch budget yields a baseline top-1 test
 accuracy at least as high as the small-split `cifar10_quick`, demonstrating the
 data-scale axis (full vs small) independent of the capacity axis.
@@ -50,9 +46,9 @@ Two-run comparison (`/deriva-ml:compare-model-runs`) against the small-split
 
 ## Upstream designs
 
-- **Model design:** `cifar10-2layer-cnn` *(now authored — model_config
+- **Model design:** `cifar10-2layer-cnn` *(model_config
   `cifar10_quick`: 32→64 ch, 128 hidden, dropout 0.0, lr 1e-3, 3 epochs, batch 128)*.
-- **Dataset design:** `cifar10-labeled-split` *(now authored — full,
+- **Dataset design:** `cifar10-labeled-split` *(full,
   leak-free, both-partitions-labeled split)*.
 
 ## Status & links

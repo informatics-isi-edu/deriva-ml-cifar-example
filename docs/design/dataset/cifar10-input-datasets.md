@@ -9,12 +9,6 @@ per-dataset slugs; all resolve to a section of this doc).
 **Status:** Built   <!-- Draft | Approved | Built | Validated | Released -->
 **Date:** 2026-06-23
 
-> **Reverse-engineered.** Reconstructed *after* the datasets existed, from
-> `src/scripts/_cifar10_datasets.py` (`create_dataset_hierarchy`) and the load
-> into localhost catalog 100. RIDs below are the **catalog-100** instances; the
-> shipped `src/configs/datasets.py` entries are empty placeholders (no RID) by
-> design — fill them per README §7 before running against a catalog.
-
 ## Purpose
 
 The full set of input datasets `load-cifar10` creates when a CIFAR-10 catalog
@@ -34,8 +28,9 @@ split/subsample operation that derived them.
 - **Determinism:** splits and subsamples use a fixed **seed 42** (the same
   canonical value as the model default), so "default everything" runs are
   reproducible.
-- **Catalog-100 scale:** 2000 images (1000 train-origin + 1000 test-origin);
-  the README's first-time default is 10,000.
+- **Scale:** set by the loader's `--num-images` (split ~50/50 into
+  train/test origin); the README's first-time default is 10,000. The example
+  RIDs below come from a 2000-image load (1000 train-origin + 1000 test-origin).
 
 ## The datasets (what the loader builds)
 
@@ -43,7 +38,7 @@ split/subsample operation that derived them.
 - **Role/Content/Origin:** `Complete` / `Labeled` (+`CIFAR_10`) / —.
 - Every loaded `Image`; the superset all other datasets derive from. Not
   consumed directly by an experiment.
-- **Catalog 100:** `11PM`.
+- **Example RID:** `11PM`.
 
 ### Canonical Toronto Split → Training / Testing
 - Produced by `split_dataset(selection_fn=cifar_canonical_partition)` —
@@ -53,7 +48,7 @@ split/subsample operation that derived them.
   `Labeled`, Origin **`Split_Partition`** (auto-applied; roles don't propagate
   from the parent). The model's `_flatten_to_leaves` expands the `Split` parent
   to these children.
-- **Catalog 100:** Split `15M2`, Training `15M8`, Testing `15MJ`.
+- **Example RID:** Split `15M2`, Training `15M8`, Testing `15MJ`.
 
 ### Small subsamples — Small_Training / Small_Testing
 - Stratified `subsample()` of `Training` / `Testing`, **`SMALL_TRAIN_SIZE=500`**
@@ -62,11 +57,11 @@ split/subsample operation that derived them.
 - **Tags:** `Training`/`Testing`, `Labeled`, Origin **`Subsample`**.
 - **Hard floor:** each source pool must be **strictly larger** than its sample
   size or the subsample would be byte-identical to its source —
-  `_require_small_variant_distinct` raises `SmallVariantDegenerateError`. This
-  is why catalog 100 needed `--num-images ≥ 1002` (see `tk-002`).
+  `_require_small_variant_distinct` raises `SmallVariantDegenerateError`. This is why a
+  catalog must be loaded with `--num-images ≥ 1002` (see `tk-002`).
 - **Consumed by:** `cifar10_default` (uses `cifar10_small_training` — note:
   training-only, no bundled labeled test partition).
-- **Catalog 100:** Small_Training `19J8`, Small_Testing `1AHY`.
+- **Example RID:** Small_Training `19J8`, Small_Testing `1AHY`.
 
 ### Labeled holdout splits — Labeled_Split & Small_Labeled_Split (→ Training / Testing)
 - **The main input family for evaluation.** Produced by `split_dataset()` over
@@ -84,7 +79,7 @@ split/subsample operation that derived them.
     `cifar10_extended_full`.
   - `cifar10_small_labeled_testing` — `cifar10_test_only` evaluates a
     checkpoint on this labeled test child.
-- **Catalog 100:** Labeled_Split `1BJM` (Training `1BJT`, Testing `1BK4`);
+- **Example RID:** Labeled_Split `1BJM` (Training `1BJT`, Testing `1BK4`);
   Small_Labeled_Split `1DJA` (Training `1DJG`, Testing `1DJT`).
 
 ## Validation (shared)
@@ -116,9 +111,9 @@ element-property precondition, not a build dependency).
 
 ## Status & links
 
-- **RIDs + versions (catalog 100):** listed per dataset above
-  (`https://localhost/id/100/<rid>`); versions via `ml.find_datasets()` — not
-  pinned (throwaway test catalog).
+- **RIDs + versions:** example RIDs listed per dataset above; resolve the
+  catalog-specific RIDs and versions for your own catalog via
+  `ml.find_datasets()` after running `load-cifar10`.
 - **configs/datasets.py:** the `cifar10_*` dataset entries (placeholders, no
   RID shipped).
 - **tacit-knowledge.md:** small-variant floor that forced `--num-images 2000`

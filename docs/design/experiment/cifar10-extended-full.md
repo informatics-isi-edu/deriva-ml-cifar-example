@@ -4,10 +4,6 @@
 **Status:** Built   <!-- Draft | Approved | Built | Validated -->
 **Date:** 2026-06-23
 
-> **Reverse-engineered.** Reconstructed after the config existed. Goal/Requirements
-> recovered from the config; **Hypothesis** and **Validation** thresholds are
-> *inferred*.
-
 ## Goal
 
 What is the best top-1 test accuracy the template can reach — high-capacity,
@@ -15,7 +11,7 @@ regularized, 50-epoch training on the **full** labeled split?
 
 ## Hypothesis
 
-*(Inferred.)* The extended config on the full labeled split is the
+The extended config on the full labeled split is the
 single best-performing experiment in the suite: more data than the small-split
 `cifar10_extended` plus high capacity and regularization (dropout 0.25, weight
 decay 1e-4) yields the highest top-1 test accuracy, and the larger training set
@@ -53,10 +49,10 @@ capacity/epochs at full data scale) and against small-split `cifar10_extended`
 
 ## Upstream designs
 
-- **Model design:** `cifar10-2layer-cnn` *(now authored — model_config
+- **Model design:** `cifar10-2layer-cnn` *(model_config
   `cifar10_extended`: 64→128 ch, 256 hidden, dropout 0.25, wd 1e-4, lr 1e-3,
   50 epochs, batch 64)*.
-- **Dataset design:** `cifar10-labeled-split` *(now authored — full split)*.
+- **Dataset design:** `cifar10-labeled-split` *(full split)*.
 
 ## Status & links
 

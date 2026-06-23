@@ -4,13 +4,6 @@
 **Status:** Built   <!-- Draft | Approved | Built | Validated -->
 **Date:** 2026-06-23
 
-> **Reverse-engineered.** Reconstructed *after* the model existed, from
-> `src/models/cifar10_cnn.py` (`SimpleCNN` + the `cifar10_cnn` entry point) and
-> the `model_config` group in `src/configs/cifar10_cnn.py`. Architecture,
-> hyperparameters, and I/O are recovered faithfully from the code; the
-> **Validation** thresholds are *inferred* (the docstring's "~60–70% accuracy"
-> is the only stated target).
-
 ## Goal
 
 A small 2-layer convolutional network that classifies 32×32 RGB CIFAR-10

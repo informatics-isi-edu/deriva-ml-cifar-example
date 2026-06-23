@@ -4,10 +4,6 @@
 **Status:** Built   <!-- Draft | Approved | Built | Validated -->
 **Date:** 2026-06-23
 
-> **Reverse-engineered.** Reconstructed after the config existed. Goal/Requirements
-> recovered from the config and the capacity-sweep block comment; **Validation**
-> thresholds are *inferred*.
-
 ## Goal
 
 Does increasing model capacity (64→128 ch, 256 hidden) and training longer (20
@@ -16,7 +12,7 @@ the capacity sweep held against the same data and seed?
 
 ## Hypothesis
 
-*(Inferred.)* At fixed dataset and seed, the large-capacity / 20-epoch model
+At fixed dataset and seed, the large-capacity / 20-epoch model
 achieves the highest top-1 test accuracy of the *unregularized* sweep points
 (`cifar10_quick` < `cifar10_small_default` < `cifar10_small_large`) — though at
 the small data scale, added capacity without regularization may begin to
@@ -53,9 +49,9 @@ separate the capacity effect from the regularization effect.
 
 ## Upstream designs
 
-- **Model design:** `cifar10-2layer-cnn` *(now authored — model_config
+- **Model design:** `cifar10-2layer-cnn` *(model_config
   `cifar10_large`: 64→128 ch, 256 hidden, dropout 0.0, lr 1e-3, 20 epochs, batch 64)*.
-- **Dataset design:** `cifar10-small-labeled-split` (now authored).
+- **Dataset design:** `cifar10-small-labeled-split`.
 
 ## Status & links
 

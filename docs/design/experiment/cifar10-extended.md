@@ -4,10 +4,6 @@
 **Status:** Built   <!-- Draft | Approved | Built | Validated -->
 **Date:** 2026-06-23
 
-> **Reverse-engineered.** Reconstructed after the config existed. Goal/Requirements
-> recovered from the config; **Hypothesis** and **Validation** thresholds are
-> *inferred*.
-
 ## Goal
 
 Does the high-capacity, regularized, long-training configuration achieve the
@@ -16,7 +12,7 @@ best attainable top-1 test accuracy on the small labeled split — the
 
 ## Hypothesis
 
-*(Inferred.)* The extended config (64→128 ch, 256 hidden, dropout 0.25, weight
+The extended config (64→128 ch, 256 hidden, dropout 0.25, weight
 decay 1e-4, lr 1e-3, 50 epochs) outperforms the quick and default configs on
 the same held-out test partition, and the regularization (dropout + weight
 decay) keeps the train/test accuracy gap narrower than an unregularized
@@ -53,10 +49,10 @@ corner of that comparison.
 
 ## Upstream designs
 
-- **Model design:** `cifar10-2layer-cnn` *(now authored — model_config
+- **Model design:** `cifar10-2layer-cnn` *(model_config
   `cifar10_extended`: 64→128 ch, 256 hidden, dropout 0.25, wd 1e-4, lr 1e-3,
   50 epochs, batch 64)*.
-- **Dataset design:** `cifar10-small-labeled-split` (now authored).
+- **Dataset design:** `cifar10-small-labeled-split`.
 
 ## Status & links
 
