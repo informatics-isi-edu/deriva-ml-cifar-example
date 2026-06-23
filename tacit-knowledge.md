@@ -75,10 +75,10 @@ shipped code, not a choice made in this session.)*
 ### tk-002 — Convention — `load-cifar10 --num-images` must clear the small-variant floor (`>= 1002`, practically `2000`)
 **When:** 2026-06-23T14:40:00-07:00
 **By:** Carl Kesselman (carl@isi.edu)
-**Supported by:** [tk-001](#tk-001) (this load is the catalog the offline smoke test couldn't reach)
+**Supported by:** [tk-001](#tk-001) (the offline smoke test couldn't reach a catalog; this is the first real load)
 
-Loading 1000 images into catalog 100 on localhost failed in the *datasets*
-phase (images uploaded fine first) with `SmallVariantDegenerateError`:
+A `load-cifar10 --num-images 1000` run failed in the *datasets* phase (images
+uploaded fine first) with `SmallVariantDegenerateError`:
 
 > At this catalog size (train_pool=500, test_pool=500) the 'small' Toronto
 > split family would be byte-identical to the full Toronto split.
@@ -113,45 +113,45 @@ re-load at a larger `--num-images` instead, because the example model's default
 dataset (`cifar10_small_labeled_split`) wants the small family present.
 
 <a id="tk-003"></a>
-### tk-003 — Provisioned localhost catalog 100 (`cifar10_test`) with 2000 images and the full split hierarchy ([dataset 11PM](https://localhost/id/100/11PM))
+### tk-003 — Convention — `load-cifar10` builds a fixed set of named datasets, and `--dry-run` provisions the schema
 **When:** 2026-06-23T14:42:30-07:00
 **By:** Carl Kesselman (carl@isi.edu)
-**Supported by:** [tk-002](#tk-002) (the N=1000 degenerate-small-variant failure that forced the re-load at 2000)
+**Supported by:** [tk-002](#tk-002) (the small-variant floor that constrains how many images the load needs)
 
-Created catalog 100 on localhost (schema `cifar10_test`) as a throwaway test
-catalog for exercising the template end-to-end after the offline smoke test.
-Loaded 2000 images (1000 train / 1000 test) + 2000 classification features,
-which clears the small-variant floor from [tk-002](#tk-002). The catalog was
-first provisioned (schema only) as a side effect of the loader's `--dry-run`
-(dry-run creates the schema but skips data writes — not a no-op), then
-populated via `--catalog-id 100 --num-images 2000`. Run was made with
-`DERIVA_ML_ALLOW_DIRTY=true` because `tacit-knowledge.md` was uncommitted; the
-recorded provenance hash therefore does not reflect the working tree, which is
-acceptable for a throwaway test catalog (a fact future readers should weigh
-before citing any execution provenance from runs against catalog 100).
+Two durable facts learned while standing up a CIFAR-10 catalog to exercise the
+template end-to-end after the offline smoke test (the catalog itself was a
+throwaway, so its RIDs/host/catalog-id are deliberately *not* recorded here —
+fetch live catalog state from `ml.find_datasets()` instead).
 
-The config-name → RID mapping the loader assigned (the catalog stores the RIDs
-and types, but not which `src/configs/datasets.py` name they back — that
-mapping is a project decision):
+**`--dry-run` is not a no-op — it provisions the schema.** The loader's
+`--dry-run` creates the catalog and installs the full schema (`cifar10_*`
+domain model + `deriva-ml`), and only skips the *data* writes (image upload,
+features, dataset hierarchy). So a "dry run" leaves a real, schema-provisioned
+but empty catalog behind. Useful to know both for verifying auth/connectivity
+cheaply and for not accidentally accumulating orphaned catalogs.
 
-| `datasets.py` config name | Dataset | RID |
-|---|---|---|
-| `cifar10_complete` | Complete (Labeled) | `11PM` |
-| `cifar10_split` | Split | `15M2` |
-| `cifar10_training` | Training | `15M8` |
-| `cifar10_testing` | Testing | `15MJ` |
-| `cifar10_small_training` | Small_Training (Subsample) | `19J8` |
-| `cifar10_small_testing` | Small_Testing (Subsample) | `1AHY` |
-| `cifar10_labeled_split` | Labeled_Split | `1BJM` |
-| `cifar10_labeled_training` | Labeled_Training | `1BJT` |
-| `cifar10_labeled_testing` | Labeled_Testing | `1BK4` |
-| `cifar10_small_labeled_split` | Small_Labeled_Split | `1DJA` |
-| `cifar10_small_labeled_training` | Small_Labeled_Training | `1DJG` |
-| `cifar10_small_labeled_testing` | Small_Labeled_Testing | `1DJT` |
+**The config-name → dataset-role mapping is a project decision** (the catalog
+stores each dataset's RID, role, and origin tags, but not which
+`src/configs/datasets.py` name is *intended* to pin it — that association lives
+in the template). `load-cifar10` always builds the same named family; the
+durable mapping is:
 
-Implications for collaborators: to run the example model against this catalog,
-either pass `--host localhost --catalog 100` on the CLI, or wire these RIDs
-into `src/configs/datasets.py` (per README §7) — the shipped defaults still
-carry stale RIDs from a prior demo catalog and will not resolve against
-catalog 100. Dataset *versions* still need confirming via `ml.find_datasets()`
-before pinning them in config.
+| `datasets.py` config name | Dataset role / origin |
+|---|---|
+| `cifar10_complete` | Complete (Labeled) — the root superset |
+| `cifar10_split` / `_training` / `_testing` | canonical Toronto Split + its Training/Testing children (`Split_Partition`) |
+| `cifar10_small_training` / `_small_testing` | stratified `Subsample` of Training/Testing (sibling pair, no parent Split) |
+| `cifar10_labeled_split` / `_training` / `_testing` | training-derived labeled holdout Split + children |
+| `cifar10_small_labeled_split` / `_training` / `_testing` | small labeled holdout Split + children (the example model's default) |
+
+(The full structural detail lives in the forward design doc
+`docs/design/dataset/cifar10-input-datasets.md`.)
+
+Implications for collaborators: to run the example model against a freshly
+loaded catalog, either pass `--host <h> --catalog <id>` on the CLI, or fill the
+RIDs into `src/configs/datasets.py` (per README §7) — the shipped defaults
+carry stale RIDs from a prior demo catalog and won't resolve. Resolve the
+actual RIDs + versions for your catalog via `ml.find_datasets()` before pinning
+them. If you load with `DERIVA_ML_ALLOW_DIRTY=true` (uncommitted tree), the
+recorded git provenance hash won't reflect the working tree — fine for a
+throwaway catalog, but don't cite that provenance as reproducible.
