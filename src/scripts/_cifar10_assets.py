@@ -45,6 +45,7 @@ from typing import Any
 
 from deriva_ml import DerivaML
 from deriva_ml.core.ermrest import UploadProgress
+from deriva_ml.core.filespec import FileSpec
 from deriva_ml.execution import ExecutionConfiguration
 
 from scripts._cifar10_source import download_cifar10_archive, extract_cifar10_to_png
@@ -388,6 +389,32 @@ def upload_images(
                         shutil.rmtree(item)
                     else:
                         item.unlink()
+
+            # Record the source images as by-reference File provenance, BEFORE
+            # uploading them as Image assets. ``add_files`` inserts one File-table
+            # row per source image (URL + MD5 + length — no bytes copied into
+            # Hatrac) and links each as an *Input* of this execution. The
+            # resulting File-typed dataset(s) mirror the extracted train/ and
+            # test/ directory structure, giving the catalog a first-class record
+            # of which source files the Image assets were derived from. This is
+            # provenance only; the per-image Hatrac upload below is unchanged.
+            source_specs = [
+                spec
+                for img_path in (*train_paths, *test_paths)
+                for spec in FileSpec.create_filespecs(
+                    img_path,
+                    description="CIFAR-10 source image (pre-upload reference)",
+                    file_types=["Image"],
+                )
+            ]
+            source_dataset = exe.add_files(
+                source_specs,
+                description="CIFAR-10 source images registered as upload-execution inputs",
+            )
+            logger.info(
+                f"  Registered {len(source_specs)} source files as Input provenance "
+                f"(File dataset {source_dataset.dataset_rid})"
+            )
 
             # Register train images
             for img_path in train_paths:

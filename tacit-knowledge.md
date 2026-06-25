@@ -155,3 +155,220 @@ actual RIDs + versions for your catalog via `ml.find_datasets()` before pinning
 them. If you load with `DERIVA_ML_ALLOW_DIRTY=true` (uncommitted tree), the
 recorded git provenance hash won't reflect the working tree — fine for a
 throwaway catalog, but don't cite that provenance as reproducible.
+
+<a id="tk-004"></a>
+### tk-004 — Convention — `add_files()` is the only by-reference asset API in deriva-ml 1.45; it tags files as Output, and `LocalFile` (the Input-side primitive) isn't shipped yet
+**When:** 2026-06-24T00:00:00-07:00
+**By:** Carl Kesselman (carl@isi.edu)
+
+Surveyed how to register an external/remote file *by reference* (record its
+URL + MD5 + length without copying bytes into hatrac) — the use case being to
+register the upstream CIFAR-10 source archive for provenance rather than
+re-uploading it. Findings about the deriva-ml 1.45 API surface, recorded
+because they shape any future by-reference work in this project:
+
+- **`add_files(files, execution_rid, dataset_types, description)`** is the only
+  by-reference API actually available. It inserts `File` rows (a `FileSpec`
+  carries `url` + `md5` + `length`; remote URLs pass through, local paths are
+  rewritten to `tag://` URIs), links them to the execution, and returns a
+  `Dataset`. It tags the files **`Asset_Role="Output"`** of that execution.
+- **There is no by-reference path into a named domain asset table** (e.g.
+  `Image`). `create_asset` always wires a hatrac upload template — the
+  `use_hatrac=False` flag that builds an external/URL-only table is internal
+  and used solely to construct the generic `File` table. So: external file →
+  generic `File` table; named asset table (`Image`, model weights, …) → byte
+  upload via `asset_file_path()` + `commit_output_assets()`. No overlap.
+- **`LocalFile`** (declared as `ExecutionConfiguration(assets=[LocalFile(
+  path=...)])`, plus a `LocalFileConfig` for hydra) would register the file as
+  an execution **Input** by reference — the *semantically correct* primitive
+  for a *source the run consumes*, since `add_files`' `Output` role is wrong
+  for a source archive. **But it is not present in deriva-ml 1.45.0** — not
+  importable from `deriva_ml.execution`, no `LocalFileConfig` export, zero
+  matches in the package. It is documented in the `work-with-assets` skill
+  (plugin v1.11.1), so it is either a newer or not-yet-released API.
+
+Implications for collaborators: to register a by-reference source today, use
+`add_files()` and accept that the source archive is recorded as an `Output`
+(lineage still walks from `Image` assets back to the archive via the shared
+upload execution). If/when `LocalFile` ships in the pinned deriva-ml, prefer it
+for *inputs* — it carries the correct Input role and keeps source bytes local.
+Re-check `from deriva_ml.execution import LocalFile` against the installed
+version before designing around it.
+
+**Weighed alternatives:** considered a purpose-built named external asset table
+via `create_asset(use_hatrac=False, ...)` — rejected: `use_hatrac` isn't a
+public `create_asset` parameter, so it would mean hand-building schema, and the
+generic `File` table already serves the by-reference role.
+
+<a id="tk-005"></a>
+### tk-005 — Convention — `add_files()` in deriva-ml 1.51.9 tags references as **Input** and creates one File-typed dataset per source directory
+**When:** 2026-06-24T01:00:00-07:00
+**By:** Carl Kesselman (carl@isi.edu)
+**Supported by:** [tk-004](#tk-004) (the 1.45 behavior this supersedes after the version bump)
+
+Bumped the pinned deriva-ml from 1.45.0 to **1.51.9** (git dep, via
+`uv lock --upgrade-package deriva-ml`) specifically to get the corrected
+by-reference semantics. Two claims in [tk-004](#tk-004) are **version-bound to
+1.45 and no longer hold on 1.51.9** — recording the corrected behavior here:
+
+- **Role flipped Output → Input.** `add_files` now links each `File` row as
+  `File_Execution.Asset_Role="Input"`, by design and intrinsically (not a
+  parameter): *"a `File` reference names a file the run consumed, so it is
+  always an Input."* This makes `add_files` the semantically-correct primitive
+  for recording a *source* a run consumes — so the source-archive use case no
+  longer needs `LocalFile` to get the Input role. (`LocalFile` does now exist —
+  `deriva_ml.asset.aux_classes.LocalFile(*, path: str, cache: bool=False)` —
+  but it's the config-declared input path, a different ergonomic, not required
+  for in-loop registration.)
+- **`Execution.add_files` injects `execution_rid`.** The `Execution`-bound
+  method signature is `add_files(files, dataset_types=None, description="")` —
+  no `execution_rid` arg; call it as `exe.add_files(specs)`. (The `DerivaML`
+  mixin method still takes `execution_rid` explicitly.)
+
+Answers to "what datasets/types does `add_files` create" (from the 1.51.9
+source, durable behavior):
+
+- **Dataset_Type tags:** every dataset `add_files` creates is tagged **`File`**
+  (always prepended), **plus** any terms passed in `dataset_types` (which must
+  pre-exist in the `Dataset_Type` vocabulary — it `lookup_term`s each and
+  raises on an undefined term). The same tag list is applied to every dataset
+  the call creates, nested ones included. Note the two distinct axes: a
+  `FileSpec`'s `file_types` are validated against the **`Asset_Type`** vocab and
+  tag the `File` *rows*; `dataset_types` are validated against the
+  **`Dataset_Type`** vocab and tag the *datasets*.
+- **Datasets created:** **one dataset per distinct parent directory** of the
+  registered files, built deepest-first and **nested to mirror the directory
+  tree** (child-dir datasets become members of their parent-dir dataset); the
+  call returns the top-most dataset. So a *flat* source dir → exactly **one**
+  File-typed dataset containing all the file references; a dir with subfolders
+  → a nested dataset hierarchy.
+
+Implications for collaborators: registering a flat directory of CIFAR source
+images via `FileSpec.create_filespecs(source_dir)` + `exe.add_files(specs)`
+yields a single `File`-typed Input dataset of references, with no bytes
+uploaded — pair it with the existing `asset_file_path(copy_file=False)` +
+`commit_output_assets()` Output-upload to get both the source-provenance layer
+and the hatrac-backed `Image` assets in one execution. If you want the source
+dataset to carry a domain tag (e.g. `CIFAR_Source`) alongside `File`, add that
+term to the `Dataset_Type` vocabulary in the schema phase first.
+
+<a id="tk-006"></a>
+### tk-006 — Dead end — a single `add_files()` of ~600 source images fails inside `add_dataset_members`/`resolve_rids`
+**When:** 2026-06-24T02:00:00-07:00
+**By:** Carl Kesselman (carl@isi.edu)
+**Supported by:** [tk-005](#tk-005) (the add_files source-registration approach this implements)
+
+Implemented the source-provenance idea: in `_cifar10_assets.py:upload_images`,
+register the sampled source PNGs via `exe.add_files(FileSpec.create_filespecs(
+...))` as by-reference Input before the per-image Hatrac upload. A first run
+against a fresh localhost catalog with `--num-images 2000` (so ~600 sampled
+source files passed in one `add_files` call) **failed in the datasets step of
+`add_files` itself**, not in the template logic:
+
+- `add_files` inserted the ~600 `File` rows, then its internal
+  `Dataset.add_dataset_members(members=<600 RIDs>)` → `resolve_rids` raised
+  `DerivaMLRidsNotFound` for *all* of those just-inserted RIDs.
+- A secondary `400 Bad Request` followed — *"index row size 3352 exceeds btree
+  maximum 2704 for `Execution_Status_Detail_idx`"* — which is a **red herring**:
+  it's the execution state machine trying to write the giant 600-RID
+  `RidsNotFound` error message into the indexed `Execution.Status_Detail`
+  column, which can't hold a value that large. The btree error is a *symptom of
+  the error message's size*, not the cause.
+
+Root cause (as far as reading the 1.51.10 source took it): the failure is in
+deriva-ml's `add_files` → `add_dataset_members` → `resolve_rids` path when many
+members are passed at once. `resolve_rids` resolves the freshly-inserted File
+RIDs by querying the `File` table with `RID == AnyQuantifier(*~600 rids)` (a
+single large IN-style ERMrest query); for ~600 RIDs that lookup returns nothing
+(candidate `File` rows not found), so every RID is reported missing. Most
+likely a request/URL-size or read-after-write visibility limit on the batched
+resolution — an **upstream scale limit in `add_files`**, not a template bug.
+The catalog (108) was left schema-provisioned but the upload execution failed,
+so no images/datasets landed.
+
+Implications for collaborators: `add_files` is not safe to call with hundreds
+of files in one shot against this stack today. Do not pass the whole sampled
+corpus in a single `add_files`. Open options (none yet validated): (a) batch
+`add_files` into small chunks (e.g. ≤100 files/call); (b) register a single
+*source-archive* File reference (one `.tar.gz`, the original design) instead of
+per-image references, which sidesteps the many-member path entirely; (c) report
+upstream and pin a fix. Option (b) is both smaller and closer to the original
+"record where the data came from" intent.
+
+**Weighed alternatives:** registering per-image source references (chosen for
+this attempt because it mirrors the exact files uploaded) vs. registering the
+one source archive. The per-image path hit this scale wall; the archive path
+avoids it and is the likely pivot.
+
+<a id="tk-007"></a>
+### tk-007 — The deriva-ml 1.51.11 `add_files` "fix" does NOT resolve the many-member failure; the membership path is still unbatched
+**When:** 2026-06-24T03:00:00-07:00
+**By:** Carl Kesselman (carl@isi.edu)
+**Supported by:** [tk-006](#tk-006) (the failure this version was meant to fix)
+
+Bumped deriva-ml 1.51.10 → 1.51.11 (commit `8fd41b31`) to pick up an `add_files`
+fix, then re-ran the per-image source-registration load (`--num-images 2000`,
+~1000 source files per train/test directory). **It failed with the exact same
+error** as [tk-006](#tk-006) — byte-identical traceback: `add_files`
+(`file.py:209`) → `Dataset.add_dataset_members` (`dataset.py:2134`) →
+`resolve_rids` (`rid_resolution.py:216`) → `DerivaMLRidsNotFound`, plus the same
+`Execution_Status_Detail_idx` btree-2704 red herring.
+
+What 1.51.11 actually changed (and why it missed): `add_files` now **streams the
+File-row inserts in batches of `chunk_size=500`** (`for batch in batched(files,
+chunk_size)`). That bounds the *insert/tag/link* side. But the **dataset-build
+tail is unchanged** — after all batches, it still calls
+`dataset.add_dataset_members(members=<all RIDs for that directory>)` once per
+source directory. For a 2000-image load that is ~1000 RIDs in a single
+`add_dataset_members` → a single `resolve_rids` →
+`RID == AnyQuantifier(*~1000 rids)` query, which is the call that fails. So the
+fix addressed insert batching, not the membership-resolution path that `tk-006`
+identified as the actual failure point.
+
+Implications for collaborators: do not assume the by-reference `add_files` path
+works for many files on 1.51.11 — it does not. The unblock still requires either
+(a) an upstream fix to **batch `add_dataset_members`/`resolve_rids`** (not just
+the inserts), (b) register the single source *archive* (one File row, no
+many-member membership call — sidesteps it entirely), or (c) chunk our own
+`add_files` calls so each directory's membership stays small. Re-verify against
+whatever deriva-ml version claims the fix by reading the `add_files` *tail*
+(`add_dataset_members`), not just the insert loop — the insert batching is a
+decoy.
+
+**Weighed alternatives:** *(none new — same options as [tk-006](#tk-006); this
+entry records that the version-bump path (c→upstream) did not pan out on
+1.51.11.)*
+
+<a id="tk-008"></a>
+### tk-008 — Fixed in deriva-ml 1.51.12 — `resolve_rids` now chunks at 500 RIDs/query; the per-image `add_files` source registration works end-to-end
+**When:** 2026-06-24T04:00:00-07:00
+**By:** Carl Kesselman (carl@isi.edu)
+**Supported by:** [tk-006](#tk-006) (original root cause), [tk-007](#tk-007) (the 1.51.11 fix that missed)
+
+Bumped deriva-ml to 1.51.12 (commit `a03b1db6`) and the `add_files` many-member
+failure from [tk-006](#tk-006)/[tk-007](#tk-007) is **resolved**. The fix landed
+in the right place this time: `resolve_rids` (`core/mixins/rid_resolution.py`)
+now defines `_MAX_RIDS_PER_QUERY = 500` and **chunks** the lookup —
+`for rid_chunk in batched(remaining_rids, 500): filter(RID == AnyQuantifier(
+*rid_chunk))`. The in-code comment confirms the exact root cause we traced: *"a
+10k-RID URL is ~70 KB → HTTP 414. Without chunking, resolving [fails]... 20
+chunks of 500 fetched cleanly, no 414."* So the original failure was an HTTP
+request-size (URL-length / 414) limit on the single giant `RID == Any(...)`
+query — not read-after-write. (`add_files`' own tail still calls
+`add_dataset_members(members=<~1000 rids>)` unbatched, but it no longer needs to
+batch, because the resolution underneath it now chunks.)
+
+Verified end-to-end: re-ran `load-cifar10 --create-catalog --num-images 2000`
+with the per-image source-registration step. The upload execution completed —
+2000 images, 2000 features, and the full 12-dataset hierarchy — **plus** the
+`add_files` source registration produced the expected File/Directory datasets
+(`['File','Directory']` tags, one per `train/`/`test/` source subdirectory, per
+[tk-005](#tk-005)'s one-dataset-per-directory rule).
+
+Implications for collaborators: the by-reference `add_files` source-provenance
+approach is now viable on deriva-ml ≥ 1.51.12. Pin at or above that version when
+relying on `add_files` (or any `resolve_rids` / `add_dataset_members` call) with
+more than ~500 members. The lesson from the three-version chase: when an upstream
+"fix" claims to address a many-member failure, verify it touched the
+**resolution query** (`resolve_rids` chunking), not just the insert loop —
+1.51.11 batched inserts and looked fixed but wasn't (see [tk-007](#tk-007)).
