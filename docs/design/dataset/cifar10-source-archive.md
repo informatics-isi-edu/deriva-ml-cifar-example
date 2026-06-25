@@ -48,21 +48,30 @@ that every experiment depends on is unchanged.
 
 ## Structure plan
 
-- **Pattern:** File-backed dataset(s) (the `Dataset` `add_files` returns).
-  `add_files` builds **one dataset per source directory**, nested to mirror the
-  directory tree — so the loader's `train/` and `test/` source subdirs yield
-  two File datasets (not one). Not a split or subsample.
+- **Pattern:** File-backed datasets (the `Dataset` `add_files` returns), built
+  as a **nested tree mirroring the source directory layout**. The loader stages
+  the sampled train/test files under one root (`_source/train/`,
+  `_source/test/`) and points `create_filespecs` at that root; `add_files`
+  groups files by parent directory and nests, producing **a parent "source"
+  File dataset that contains a `train` File dataset + a `test` File dataset** —
+  the Toronto train/test split mirrored on the source side. Not a split or
+  subsample (no `split_dataset`/`subsample`).
+- **Why staged, not the raw extraction:** `create_filespecs` walks a directory
+  recursively, so pointing it at the *full* extraction would register all ~60K
+  extracted files — over-claiming what was uploaded. Staging the **sampled**
+  subset (via symlinks, no second byte copy) keeps the registered provenance
+  equal to exactly the `--num-images` images that became `Image` assets, while
+  still giving `add_files` a directory tree to nest.
 - **Dataset_Type tags (three axes):** Content `File` + `Directory` (the
-  auto-applied built-ins). Role and Origin are not split/subsample-derived
-  (registered directly, not produced by `split_dataset`/`subsample`).
-  `add_files` creates no automatic `Dataset_Dataset` edge to the `Complete`
-  image dataset — the link is execution-mediated, not dataset-to-dataset.
+  auto-applied built-ins) on every dataset in the tree. Role and Origin are not
+  split/subsample-derived. `add_files` creates no automatic `Dataset_Dataset`
+  edge to the `Complete` image dataset — that link is execution-mediated.
 
 ## Validation
 
-- **Registration:** one `File` row per sampled source image, each carrying a
-  `tag://` URL, a non-empty MD5, and the file's byte length; one File dataset
-  per source directory.
+- **Registration:** one `File` row per sampled source image (each with a
+  `tag://` URL, MD5, byte length); a nested File-dataset tree — one parent
+  dataset whose members are a `train` File dataset and a `test` File dataset.
 - **Provenance:** each `File` row links (via `File_Execution`, `Asset_Role =
   Input`) to the same execution that uploads the `Image` assets — so lineage
   from an `Image` back to its source files is reachable through that shared
@@ -92,9 +101,15 @@ files), but `add_files` creates no automatic `Dataset_Dataset` edge to them.
   `exe.add_files(FileSpec.create_filespecs(...))` runs at the start of the
   upload execution, before the per-image `asset_file_path` loop. No schema
   change required.
-- **Requires:** deriva-ml ≥ 1.51.12 (the `resolve_rids` chunking fix; earlier
-  versions fail at this scale — see `tk-006`/`tk-007`/`tk-008`).
+- **Requires:** deriva-ml ≥ **1.51.14** — 1.51.12 added the `resolve_rids`
+  chunking fix needed at this scale (`tk-006`/`tk-007`/`tk-008`), and 1.51.14
+  added the directory-tree nesting that makes equal-depth siblings (`train`,
+  `test`) nest under a common root (`tk-009`/`tk-010`). Below 1.51.14 the source
+  side is two flat datasets with no parent.
 - **RID + version:** catalog-specific; the source datasets carry `File` +
-  `Directory` tags (resolve via `ml.find_datasets()`). Not pinned.
+  `Directory` tags. Query each one's origin folder via `Dataset.source_directory`
+  (root `'.'`, children `'train'`/`'test'`) and gate on `Dataset.is_directory`.
+  Resolve RIDs via `ml.find_datasets()`. Not pinned.
 - **tacit-knowledge.md:** `tk-005` (add_files behavior), `tk-006`/`tk-007`
-  (the scale bug), `tk-008` (the 1.51.12 fix that made this work).
+  (the scale bug), `tk-008` (1.51.12 scale fix), `tk-009` (the nesting gap),
+  `tk-010` (the 1.51.14 nesting fix + `source_directory` API).

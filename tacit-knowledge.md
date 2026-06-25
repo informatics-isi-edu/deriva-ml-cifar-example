@@ -372,3 +372,78 @@ more than ~500 members. The lesson from the three-version chase: when an upstrea
 "fix" claims to address a many-member failure, verify it touched the
 **resolution query** (`resolve_rids` chunking), not just the insert loop —
 1.51.11 batched inserts and looked fixed but wasn't (see [tk-007](#tk-007)).
+
+<a id="tk-009"></a>
+### tk-009 — `add_files` nesting only fires for genuinely-nested dirs, NOT equal-depth siblings — so `train/`+`test/` give two flat File datasets, never a parent
+**When:** 2026-06-24T05:00:00-07:00
+**By:** Carl Kesselman (carl@isi.edu)
+**Supported by:** [tk-005](#tk-005) (the one-dataset-per-directory behavior this refines)
+
+Tried to get a nested **parent → train + test** File-dataset tree out of the
+source `add_files` registration by staging the sampled images under one root
+(`_source/train/`, `_source/test/`) and pointing `create_filespecs` at the root.
+**It did not work** — the catalog still has **two flat sibling File datasets**
+(1000 members each, no parent, no children), identical to passing a flat file
+list.
+
+Root cause (read from `add_files`, `core/mixins/file.py`): it buckets files into
+`dir_rid_map` keyed by each file's **immediate parent directory**, then creates
+one dataset per bucket and nests only when a directory is *shallower* than the
+previous one (`if len(p.parts) < path_length`). Two leaf dirs at **equal depth**
+(`train`, `test`) never satisfy that `<` condition, and the enclosing `_source/`
+directory **contains no files directly**, so it never becomes a bucket key →
+no parent dataset is ever created. The nesting algorithm only materializes a
+parent for *genuinely nested* file-bearing paths (e.g. `a/` and `a/b/`), not for
+sibling leaves under a common (empty) parent.
+
+Implications for collaborators: you cannot get a "whole-collection" parent
+File dataset over `train`+`test` just by arranging the directory layout — the
+staging-into-one-root trick is wasted effort (it adds a staging dir + symlinks
+for zero structural gain). To get a parent that contains the train + test File
+datasets, **create the parent dataset explicitly** (`create_dataset` +
+`add_dataset_members([train_ds, test_ds])`) rather than relying on `add_files`'
+directory nesting. Absent that, the honest description of the source-provenance
+layer is "two flat File datasets, one per Toronto partition."
+
+**Weighed alternatives:** (1) staged nested layout — *tried, failed* (this
+entry). (2) explicit parent dataset — viable, hand-built nesting. (3) accept two
+flat datasets — simplest; the train/test source split is still captured, just
+without an over-arching parent. Decision pending.
+
+<a id="tk-010"></a>
+### tk-010 — Fixed in deriva-ml 1.51.14 — `add_files` now nests equal-depth siblings under a common root; `Dataset.source_directory`/`is_directory` expose the structure
+**When:** 2026-06-25T00:00:00-07:00
+**By:** Carl Kesselman (carl@isi.edu)
+**Supported by:** [tk-009](#tk-009) (the equal-depth-sibling nesting gap this fixes)
+
+Bumped deriva-ml to 1.51.14. The [tk-009](#tk-009) nesting gap is **resolved**:
+`add_files` replaced its incremental depth-comparison loop with a
+`_directory_tree()` helper that finds the source directories' common ancestor
+(the "ingest root") and materializes a dataset for **every** tree node — each
+file-bearing directory *plus every intermediate ancestor up to the root*. So
+equal-depth leaf dirs (`train`, `test`) now get a parent dataset for their
+common ancestor even though that ancestor holds no files directly. `add_files`
+now returns the **ingest-root** dataset.
+
+New API for the directory structure (this is the "directory information on
+datasets" the loader now uses): each directory dataset records the folder it
+represents in a new `Directory_Dataset` table, surfaced as two `Dataset`
+properties — `source_directory` (the path relative to the ingest root; root is
+`"."`) and `is_directory` (True iff it has a `Directory_Dataset` row).
+
+Verified end-to-end: re-ran the loader (which stages the sampled images under
+`_source/train/` + `_source/test/` and calls `add_files(create_filespecs(
+_source))`). The catalog now holds **three** File datasets in a tree — a root
+(`source_directory='.'`, members = the two child *datasets*) with `train`
+(`source_directory='train'`, 1000 File members) and `test`
+(`source_directory='test'`, 1000 File members) as children — instead of the two
+flat siblings from [tk-009](#tk-009). The loader logs the children via
+`source_root_ds.list_dataset_children()` + `child.source_directory`.
+
+Implications for collaborators: registering a staged directory tree via
+`add_files` now yields a faithful nested dataset hierarchy on deriva-ml ≥
+1.51.14 — the "build the parent dataset explicitly" workaround
+([tk-009](#tk-009) option 2) is no longer needed. Query a source dataset's
+origin folder with `Dataset.source_directory` and gate on `Dataset.is_directory`
+to separate auto-created directory datasets from curated ones. Pin ≥ 1.51.14
+when relying on this.

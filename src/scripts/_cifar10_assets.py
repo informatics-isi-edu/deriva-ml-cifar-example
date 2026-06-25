@@ -393,27 +393,52 @@ def upload_images(
             # Record the source images as by-reference File provenance, BEFORE
             # uploading them as Image assets. ``add_files`` inserts one File-table
             # row per source image (URL + MD5 + length — no bytes copied into
-            # Hatrac) and links each as an *Input* of this execution. The
-            # resulting File-typed dataset(s) mirror the extracted train/ and
-            # test/ directory structure, giving the catalog a first-class record
-            # of which source files the Image assets were derived from. This is
-            # provenance only; the per-image Hatrac upload below is unchanged.
-            source_specs = [
-                spec
-                for img_path in (*train_paths, *test_paths)
-                for spec in FileSpec.create_filespecs(
-                    img_path,
+            # Hatrac) and links each as an *Input* of this execution, giving the
+            # catalog a first-class record of which source files the Image assets
+            # were derived from. This is provenance only; the per-image Hatrac
+            # upload below is unchanged.
+            #
+            # We stage the *sampled* train/test paths under a single clean root
+            # (``_source/train/`` + ``_source/test/``) and point
+            # ``create_filespecs`` at that root. ``add_files`` reconstructs the
+            # full directory containment tree (deriva-ml >= 1.51.14: intermediate
+            # ancestors get datasets too, so equal-depth siblings nest under a
+            # common parent), yielding the structure: one root "source" File
+            # dataset whose children are a ``train`` File dataset and a ``test``
+            # File dataset — mirroring the Toronto train/test split on the source
+            # side. Each directory dataset records the folder it represents in the
+            # ``Directory_Dataset`` table, queryable via ``Dataset.source_directory``.
+            # Staging the *sampled* subset (not the full extraction) keeps the
+            # registered provenance equal to exactly the images that were
+            # uploaded. Symlinks avoid a second byte copy; the staging dir is
+            # inside the temp dir and is cleaned up with it.
+            source_root = temp_path / "_source"
+            for sub, paths in (("train", train_paths), ("test", test_paths)):
+                sub_dir = source_root / sub
+                sub_dir.mkdir(parents=True, exist_ok=True)
+                for img_path in paths:
+                    (sub_dir / img_path.name).symlink_to(img_path)
+            source_specs = list(
+                FileSpec.create_filespecs(
+                    source_root,
                     description="CIFAR-10 source image (pre-upload reference)",
                     file_types=["Image"],
                 )
-            ]
-            source_dataset = exe.add_files(
+            )
+            # ``add_files`` returns the ingest-root dataset (source_directory ".").
+            source_root_ds = exe.add_files(
                 source_specs,
                 description="CIFAR-10 source images registered as upload-execution inputs",
             )
+            child_dirs = sorted(
+                child.source_directory
+                for child in source_root_ds.list_dataset_children()
+                if child.is_directory
+            )
             logger.info(
                 f"  Registered {len(source_specs)} source files as Input provenance "
-                f"(File dataset {source_dataset.dataset_rid})"
+                f"(root File dataset {source_root_ds.dataset_rid}, "
+                f"children: {child_dirs})"
             )
 
             # Register train images
