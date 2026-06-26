@@ -447,3 +447,45 @@ Implications for collaborators: registering a staged directory tree via
 origin folder with `Dataset.source_directory` and gate on `Dataset.is_directory`
 to separate auto-created directory datasets from curated ones. Pin ≥ 1.51.14
 when relying on this.
+
+<a id="tk-011"></a>
+### tk-011 — The `add_files` source File datasets do NOT appear in an image dataset's `lookup_lineage` — source provenance and dataset lineage are parallel, execution-bridged structures
+**When:** 2026-06-25T01:00:00-07:00
+**By:** Carl Kesselman (carl@isi.edu)
+**Supported by:** [tk-010](#tk-010) (the nested source File datasets whose lineage visibility this checks)
+
+Checked whether the by-reference source File datasets (the `add_files`-built
+`root → train + test` tree from [tk-010](#tk-010)) surface as *consumed* inputs
+when walking a downstream image dataset's lineage. They do **not**.
+`ml.lookup_lineage(<a Small_Testing subsample>)` reports its producing
+execution's `consumed_datasets` as the **image** datasets only (Complete + the
+Split's Training/Testing) — none of the three source File datasets appear.
+
+Why, and the durable shape: the CIFAR loader builds everything in one execution
+("CIFAR-10 Asset Upload" workflow), but provenance fans into two **parallel**
+branches off that shared execution, with no dataset-to-dataset edge between them:
+
+- **Source branch:** `add_files` registers source File rows as *Input*; the
+  upload produces the `Image` assets as *Output*. (File rows → Image assets.)
+- **Dataset branch:** the dataset hierarchy is assembled from `Image` RIDs
+  (Complete → Split → subsample), so a dataset's lineage walks
+  Image-RID-membership and its producing execution — never the File datasets.
+
+So `lookup_lineage` on an image dataset will not lead a reader to the source
+images. To bridge the two you must hop manually: image dataset → its `Image`
+members → the execution that produced those Images → that execution's Input
+`File` rows. (Observed wrinkle: the lineage's `consumed_assets` listed a single
+`File` RID that was *not* one of the 2000 source rows — even the individual
+source File rows don't reliably show as consumed assets of the dataset's
+producing execution; the connection is the shared *execution*, not a recorded
+consumed-asset edge.)
+
+Implications for collaborators: the `add_files` source-provenance layer is a
+**separate, queryable record of origin** (browse the File datasets directly, or
+filter `Dataset.is_directory`), **not** something that shows up in an image
+dataset's automatic lineage walk. Don't expect `lookup_lineage` on a training
+dataset to surface where the raw files came from — that linkage is
+execution-mediated and must be traversed by hand. If automatic dataset→source
+lineage is a requirement, it would need an explicit `Dataset_Dataset` edge from
+the image Complete dataset to the source File root, which `add_files` does not
+create (see [tk-005](#tk-005)).
