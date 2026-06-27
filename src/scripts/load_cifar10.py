@@ -168,13 +168,14 @@ def _find_latest_source_dataset_rid(ml) -> str:
         True
     """
     # find_datasets(sort=True) returns datasets ordered by RCT desc (newest
-    # first).  We then filter to CIFAR_Source roots: source_directory == "."
-    # identifies the root of the nested add_files tree (not train/test children).
+    # first).  We then filter to CIFAR_Source roots: is_source_root identifies
+    # the root of the nested add_files tree (not train/test children),
+    # independent of the stored Directory_Dataset.Path value.
     all_datasets = list(ml.find_datasets(sort=True))
     candidates = [
         d
         for d in all_datasets
-        if "CIFAR_Source" in d.dataset_types and d.source_directory == "."
+        if "CIFAR_Source" in d.dataset_types and d.is_source_root
     ]
     if not candidates:
         raise RuntimeError(
