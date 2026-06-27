@@ -648,3 +648,112 @@ Implications for collaborators: time-box register-phase patience to minutes, not
 seconds; distinguish "slow but progressing" from "hung" with a *second* sample
 minutes apart, not one; and never use the unauthenticated aggregate endpoint as a
 row-count oracle.
+
+<a id="tk-017"></a>
+### tk-017 — Two-execution ingest verified: source→image provenance now connects at the execution/asset level; `lookup_lineage` on an image *dataset* still needs a manual hop
+**When:** 2026-06-26T20:30:00-07:00
+**By:** Carl Kesselman (carl@isi.edu)
+**Supported by:** [tk-011](#tk-011) (the lineage gap this set out to fix), [tk-015](#tk-015) (the materialize=False that made consume-as-Input work)
+
+Full two-execution load completed end-to-end (register → upload → datasets;
+2000 images + 2000 features + the 12-dataset hierarchy + the nested source File
+tree). Verified the provenance outcome directly from `Dataset_Execution` and the
+`Image` asset rows:
+
+- The **upload execution** consumed the source File dataset as an **Input**
+  (`Dataset_Execution`: source-root File dataset → upload exec) **and** produced
+  the `Image` assets as Outputs (every `Image.execution_rid` == that same upload
+  exec). So the chain **source File dataset –Input→ upload exec –Output→ Image
+  assets** is now a recorded, traversable edge — which did NOT exist before
+  ([tk-011](#tk-011)). That is the substantive fix and it works.
+
+What is still *not* a single-hop query: `ml.lookup_lineage(<image dataset, e.g.
+Small_Testing>)` does **not** list the source File dataset in `consumed_datasets`.
+Reason: the image dataset hierarchy (Complete → Split → subsample) is built by a
+**separate datasets-phase execution** that consumes image *datasets*, not the
+upload execution; `lookup_lineage` on a dataset walks the dataset/execution
+graph, and the upload execution produced *assets*, not datasets. To get from an
+image dataset to its source you hop: image dataset → its `Image` members →
+`Image.execution_rid` (the upload exec) → that exec's Input File dataset.
+
+Implications for collaborators: the design goal — "the source files are recorded
+provenance of the images" — is achieved (execution-mediated, at the asset level,
+queryable). But do not expect `lookup_lineage` on a *training dataset* to render
+the source in one call; the source connects through the **Image-producing
+execution**, not through a dataset-to-dataset edge. If single-hop dataset→source
+lineage is ever required, the datasets-phase execution would need to also consume
+the source File dataset as an Input (or an explicit `Dataset_Dataset` edge from
+`Complete` to the source root).
+
+<a id="tk-018"></a>
+### tk-018 — Improvement flagged for deriva-ml: `lookup_lineage` should traverse a dataset's member assets to their producing execution (the data is there; the walk stops at datasets)
+**When:** 2026-06-26T20:45:00-07:00
+**By:** Carl Kesselman (carl@isi.edu)
+**Supported by:** [tk-017](#tk-017) (the manual-hop gap this would close)
+
+Decided that the single-hop gap from [tk-017](#tk-017) is best fixed **upstream
+in deriva-ml's `lookup_lineage`**, not worked around in the CIFAR loader. The
+reasoning: every provenance edge already exists in the catalog (image dataset →
+its `Image` members; `Image` members → producing execution; that execution → its
+Input source File dataset). The limitation is purely in the **traversal** —
+`lookup_lineage` (`core/mixins/execution.py`, `_walk_node`) walks dataset →
+producing/consuming executions → those executions' consumed *datasets/assets*,
+but when it reaches a dataset it does **not** descend into that dataset's
+*member assets* and walk *their* producing execution's inputs. So asset-level
+provenance is invisible to a dataset-rooted lineage query.
+
+The primitive already exists: `find_executions_consuming` (same file) already
+handles asset RIDs (`if is_asset(table): return list_asset_executions(...)`), and
+`list_dataset_members` yields a dataset's member assets. So the improvement is to
+have the walk, on reaching a dataset, also expand `member assets → their
+producing execution → that execution's inputs` and fold those into the lineage
+tree. That is a **general** fix — it helps any dataset whose members were
+execution-produced (predictions, derived assets, ingested images), not just CIFAR.
+
+Status: flagged as a separate deriva-ml work item (its own design/plan), NOT
+done. It is independent of the two-execution ingest plan. Until it lands, use the
+manual hop from [tk-017](#tk-017) to get from an image dataset to its source.
+
+<a id="tk-019"></a>
+### tk-019 — `--phase upload` run standalone was broken: `_find_latest_source_dataset_rid` called `find_datasets(dataset_types=…)`, a kwarg that doesn't exist
+**When:** 2026-06-26T21:30:00-07:00
+**By:** Carl Kesselman (carl@isi.edu)
+**Supported by:** [tk-017](#tk-017) (the connected-lineage test that exposed this)
+
+The two-execution loader threads the source File-dataset RID from the register
+phase straight into the upload phase when run as `--phase all`. But when the
+upload phase is run **standalone** (`--phase upload`, no preceding register call
+in the same process), `load_cifar10.py` has to *discover* the source dataset in
+the catalog via `_find_latest_source_dataset_rid(ml)`. That helper called
+`ml.find_datasets(dataset_types=["CIFAR_Source"])`, but `find_datasets`'
+signature is `find_datasets(deleted=False, sort=None)` — there is **no
+`dataset_types` parameter**. So standalone `--phase upload` raised
+`TypeError: find_datasets() got an unexpected keyword argument 'dataset_types'`
+and had, in fact, **never worked**.
+
+It went unnoticed because every prior live verification used `--phase all` (which
+never calls the discovery helper — the RID is threaded in directly). The defect
+only surfaced when the new connected-lineage regression test
+(`tests/test_lineage_connected.py`) split the load into separate `register` then
+`upload` phases (to skip the unneeded `datasets` phase and run faster) — which is
+exactly the standalone path. The test failing IS the regression net working.
+
+Fix: filter in Python instead. `find_datasets()` returns `Dataset` objects that
+expose `.dataset_types` (list of type-term names), `.source_directory` (`"."`
+for the root of an `add_files` tree), `.is_directory`, and `.dataset_rid`. The
+root source dataset is the one with `"CIFAR_Source" in d.dataset_types` **and**
+`d.source_directory == "."` (the `"."` is what disambiguates the root from its
+`train`/`test` children).
+
+Lesson: a code path reachable only by a CLI flag combination that no test or
+routine run exercises is effectively untested — `--phase all` passing told us
+nothing about `--phase upload` alone. The `find_datasets(dataset_types=…)` trap
+bit three times in one session (loader helper, plus the Task 8 implementer and
+reviewer who each independently assumed the same missing kwarg): `find_datasets`
+filters by neither type nor directory — you filter the returned objects yourself.
+
+**Weighed alternatives:** (1) add an explicit Input/`Dataset_Dataset` edge in the
+CIFAR loader so the existing walk finds it — rejected as a CIFAR-specific patch
+that papers over a general traversal gap. (2) accept the manual hop — rejected;
+the gap is worth fixing once, upstream. (3) improve `lookup_lineage` to traverse
+member assets — chosen.
