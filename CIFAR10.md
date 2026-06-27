@@ -35,54 +35,67 @@ Both families carry ground-truth labels in the Toronto distribution. The distinc
 
 ## Loader Walkthrough
 
-The CIFAR-10 loader (`src/scripts/load_cifar10.py`) is structured as
-a thin orchestrator that composes three single-purpose stage modules.
-Each module demonstrates one DerivaML pattern you would reuse when
-building a loader for your own data.
+The CIFAR-10 loader (`src/scripts/load_cifar10.py`) is a thin orchestrator
+that composes four single-purpose stage modules. Each module demonstrates one
+DerivaML pattern you would reuse when building a loader for your own data.
 
-| Stage | Module | Pattern demonstrated |
+| Stage (`--phase`) | Module | Pattern demonstrated |
 |---|---|---|
-| 1 | [`_cifar10_schema.py`](src/scripts/_cifar10_schema.py) | Catalog + schema setup: create or connect, register the domain model (asset table, vocabulary, feature), declare workflow and dataset types |
-| 2 | [`_cifar10_assets.py`](src/scripts/_cifar10_assets.py) | Asset upload + feature labeling: upload binary files in one Execution, re-query the catalog and add feature values in a separate Execution |
-| 3 | [`_cifar10_datasets.py`](src/scripts/_cifar10_datasets.py) | Dataset hierarchy: query existing assets, partition by attribute, assemble nested datasets with derived holdout splits |
+| `schema` | [`_cifar10_schema.py`](src/scripts/_cifar10_schema.py) | Catalog + schema setup: create or connect, register the domain model (asset table, vocabulary, feature), declare workflow and dataset types |
+| `register` | [`_cifar10_register.py`](src/scripts/_cifar10_register.py) | Source-image registration: decode-time sampling → stable cache, `add_files` to register by-reference File dataset (`cifar10_source`) as Execution 1 |
+| `upload` | [`_cifar10_upload.py`](src/scripts/_cifar10_upload.py) | File-dataset consumption + upload: consume the source File dataset as an Input (Execution 2), upload Image assets, add classification features |
+| `datasets` | [`_cifar10_datasets.py`](src/scripts/_cifar10_datasets.py) | Dataset hierarchy: query existing assets, partition by attribute, assemble nested datasets with derived holdout splits |
 
 ### Key design choices
 
 **Stages are independent.** Each stage reads back from the catalog
-rather than relying on in-memory state from earlier stages. Stage 2
-queries `Image` rows to label them; Stage 3 queries `Image` rows + their
-features to assign dataset membership. This means each stage works
-standalone — you can run them via `load-cifar10 --phase <stage>`
+rather than relying on in-memory state from earlier stages. The upload
+stage re-discovers the source File dataset via
+`ml.find_datasets(dataset_types=["CIFAR_Source"])` when run in isolation.
+The datasets stage queries `Image` rows + features. This means each stage
+works standalone — you can run them via `load-cifar10 --phase <stage>`
 against any catalog where the prior stages have completed, even from
 a different process invocation.
 
-**One Execution per logical step.** Stage 2 uses two Executions
-(one for upload, one for labeling) because they are logically
-distinct steps with different provenance. Stage 3 uses one
-Execution because creating the entire dataset hierarchy is one
-logical step.
+**Two executions for source registration + upload.** The loader uses a
+two-execution ingest: Execution 1 (`CIFAR_Source_Registration`) registers
+the sampled source PNGs as a by-reference File dataset (no bytes uploaded);
+Execution 2 (`CIFAR_Image_Upload`) consumes that File dataset as an Input
+and produces the `Image` assets as Outputs. Because both roles (Input source
+dataset, Output Image assets) attach to the same upload execution, the chain
+**source File dataset → upload exec → Image assets** is a recorded,
+traversable provenance edge.
 
-**Class encoded in filename.** Stage 2a names uploaded files
-`train_<class>_<id>.png` or `test_<class>_<id>.png`. This is what
-lets Stage 2b recover the class without needing in-memory state
-from Stage 2a, and what lets Stage 3 partition by train/test
-prefix without needing in-memory state from either earlier
-stage.
+**Class encoded in filename.** The upload stage names uploaded files
+`<partition>_<class>_<original_stem>.png` (e.g. `train_frog_42.png`). This
+lets the labeling sub-stage recover the class without in-memory state from
+the upload loop, and lets the datasets stage partition by train/test prefix
+without depending on either earlier stage.
+
+**`materialize=False` for by-reference inputs.** The source File dataset
+carries `tag://` local-path URLs (not hatrac). Consuming it as an execution
+Input requires `DatasetSpec(materialize=False)` — the default (True) would
+attempt to byte-fetch those URLs via bag materialization, which fails. The
+upload stage resolves the `tag://` URLs to local paths itself.
 
 ### Reusing for your own data
 
 When adapting this template for your own data:
 
-1. Replace `_cifar10_source.py` (the data-source layer — downloads
-   the archive, extracts to a PNG layout) with your own source code.
-2. Tweak `_cifar10_schema.py` to declare your domain model
-   (asset table for your data type, vocabulary for your categories,
-   feature for whatever labels apply).
-3. Tweak `_cifar10_assets.py` to upload your data with whatever
-   naming convention lets your features and datasets be derived
-   from the catalog state.
-4. Tweak `_cifar10_datasets.py` to assemble the dataset
-   hierarchy that matches your experimental design.
+1. Replace `_cifar10_source.py` (the data-source layer — downloads the
+   archive, samples + writes PNGs into a stable cache, writes `labels.csv`)
+   with your own source code.
+2. Tweak `_cifar10_schema.py` to declare your domain model (asset table for
+   your data type, vocabulary for your categories and dataset types, feature
+   for whatever labels apply).
+3. Tweak `_cifar10_register.py` to stage your source files into the cache
+   and register them as a by-reference File dataset (Execution 1). The
+   `# DOMAIN: replace for your data` markers in the file identify the seams.
+4. Tweak `_cifar10_upload.py` to consume the registered File dataset as an
+   Input (Execution 2), upload your data with whatever naming convention lets
+   your features and datasets be derived from the catalog state.
+5. Tweak `_cifar10_datasets.py` to assemble the dataset hierarchy that
+   matches your experimental design.
 
 The orchestrator (`load_cifar10.py`) stays as a thin CLI shim —
 you only edit it to update imports and the summary banner labels.
