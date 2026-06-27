@@ -167,18 +167,25 @@ def _find_latest_source_dataset_rid(ml) -> str:
         >>> rid.startswith("2-")  # doctest: +SKIP
         True
     """
-    datasets = ml.find_datasets(dataset_types=["CIFAR_Source"])
-    if not datasets:
+    # find_datasets(sort=True) returns datasets ordered by RCT desc (newest
+    # first).  We then filter to CIFAR_Source roots: source_directory == "."
+    # identifies the root of the nested add_files tree (not train/test children).
+    all_datasets = list(ml.find_datasets(sort=True))
+    candidates = [
+        d
+        for d in all_datasets
+        if "CIFAR_Source" in d.dataset_types and d.source_directory == "."
+    ]
+    if not candidates:
         raise RuntimeError(
             "No CIFAR_Source dataset found in catalog. "
             "Run '--phase register' first to create one."
         )
-    # find_datasets returns a list of dataset objects; pick the most recent
-    # by RID (lexicographic — higher RID = created later in ERMrest).
-    latest = sorted(datasets, key=lambda d: d.dataset_rid)[-1]
+    # sort=True means newest first; take the first match.
+    latest = candidates[0]
     logger.info(
         f"Standalone upload: discovered source dataset {latest.dataset_rid} "
-        f"(most recent CIFAR_Source dataset)"
+        f"(most recent CIFAR_Source root dataset)"
     )
     return latest.dataset_rid
 
