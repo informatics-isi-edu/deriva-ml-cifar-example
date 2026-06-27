@@ -1006,3 +1006,102 @@ simply not there, so snapshot-scoped lookups must tolerate a missing table
 rather than assume the current schema. The third live-caught bug in this lineage
 arc (after tk-019 standalone-upload, tk-021 FK-RID); the pattern holds: live
 tests at realistic scale catch what mocks and tiny fixtures cannot.
+
+<a id="tk-024"></a>
+### tk-024 — `add_files` writes one `File_Execution` Input row per file; redundant for *traversal* (the `Dataset_Execution` edge already carries the dependency) and an O(N) cost at scale — candidate for a skip option
+**When:** 2026-06-27T02:30:00-07:00
+**By:** Carl Kesselman (carl@isi.edu)
+**Supported by:** [tk-005](#tk-005) (the by-reference Input provenance pattern), [tk-023](#tk-023)
+
+Observation while inspecting catalog 278's lineage of the small dataset: the
+source-registration execution `4AP` carries **2001 `File` Input assets**
+(2000 sampled images + `labels.csv`). These come from `add_files`, which inserts
+one `File_Execution` row with `Asset_Role="Input"` **per file**
+(`deriva-ml/.../core/mixins/file.py:303-308`, a bulk/batched insert, but still N
+rows). Confirmed live: `4AP` Input assets = `{'File': 2001}`.
+
+Key finding — **these per-File Input edges are NOT needed for lineage
+traversal**. `lookup_lineage` reaches `4AP` via
+`Dataset_Version.Execution(M0J) = 4AP` (a single dataset-level edge that
+`add_files` also created when it built the `M0J` dataset). Verified:
+`_producer_of_dataset('M0J') == '4AP'`, and `_producers_of_dataset_members('M0J')
+== []`. The 2001 `File_Execution` rows are read once only to *populate*
+`4AP.consumed_assets` for display; the graph structure is identical with or
+without them.
+
+The cost is O(N) in file count, two ways: (1) **write/storage** — N extra
+association rows per `add_files` call (2M files → 2M extra rows on top of the File
++ File_Asset_Type rows); (2) **lineage read/render** — `lookup_lineage` pulls all
+N File Inputs into a single `LineageNode.consumed_assets`, which at millions of
+files is the same large-fetch/URL-length class [tk-023] just fixed for
+member-producers, and an enormous node to serialize.
+
+**DESIGNED (2026-06-27, converged after brainstorm — being implemented):** make
+`add_files` record **O(1)** input provenance instead of O(N). Change the DEFAULT
+(not an opt-out): `add_files` stops inserting per-file `File_Execution`
+`Asset_Role="Input"` rows and instead inserts **one** `Dataset_Execution`
+`Asset_Role="Input"` row — the created source dataset declared as the
+registration execution's Input (it remains the `Dataset_Version.Execution`
+*output* too). This makes `add_files` declare its input the same way every other
+execution declares a dataset input, at dataset granularity.
+
+Why this exact shape (the design questions that were resolved):
+- **Q: is the producer still known?** YES — `Dataset_Version.Execution(M0J)=4AP`
+  is the output/producer edge, written by `add_files`' `create_dataset`,
+  untouched.
+- **Q: are the files still known?** YES — dataset membership (`Dataset_File`) is
+  independent of `File_Execution`, untouched. You walk the dataset to get files,
+  exactly like a regular dataset.
+- **Q: dataset as both input AND output of one execution?** YES, deliberately —
+  the source dataset is the execution's output (it produced it) AND its declared
+  input (the registration both defines and consumes the source set). A mild
+  self-loop, but TRUE at dataset granularity. **Lineage-safe:** verified that the
+  [tk-022] self-parent guard (`if producer and producer != execution_rid`)
+  exactly covers `producer==consumer`, so `lookup_lineage` shows M0J as one
+  consumed_dataset with NO false cycle and no re-expansion.
+- **Q: provenance-enforcement?** The no-input check
+  (`ensure_artifact_producer_has_input`, fired from `dataset.py:2613` when an
+  execution authors a dataset) sees the one `Dataset_Execution` Input row →
+  `_execution_has_input` True → NO enforcement change, no "unknown-provenance"
+  sentinel, no warning.
+
+Net effect: O(N) `File_Execution` rows → **1** `Dataset_Execution` row per
+`add_files` call; `lookup_lineage` shows 1 consumed dataset instead of N consumed
+assets (the [tk-023]-class render bloat is eliminated AT THE SOURCE, so no
+lineage-side cap is needed); no public-model change.
+
+Tradeoff accepted: drops File-granular consumption provenance —
+`find_executions_consuming(<single File RID>)` returns empty for
+add_files-registered source files (find consumers via the dataset instead). For a
+large by-reference source corpus almost always queried as a *dataset*, that is
+the right trade; the user chose to change the default rather than gate it behind
+a parameter. Behavior change to a released API → minor bump (deriva-ml 1.53.0),
+documented in the changelog.
+
+**Implementation subtlety (provenance-timing): `create_dataset` runs the
+no-input enforcement check, so the dataset-Input edge must be declared with an
+exemption flag, or a spurious sentinel fires.** When `add_files` creates its root
+dataset, `Dataset.create_dataset` (via `dataset.py:2613`) runs
+`ensure_artifact_producer_has_input` *during* creation — BEFORE `add_files` can
+write the `Dataset_Execution` input edge. So the check sees "no input yet" and
+links the unknown-provenance **sentinel** File as an Input (+ a warning). First
+attempt minimized this from N sentinels to 1 by reordering (create root → write
+edge → create children, so children see the edge), but the ROOT's creation still
+fired one sentinel. That's misleading — the input is NOT unknown, it's the source
+dataset. Resolution: add an internal `_skip_input_check=True` param to
+`create_dataset` (mirroring the existing `_skip_version_increment` pattern) that
+suppresses the enforcement call; `add_files` passes it when creating the root and
+writes the `Dataset_Execution` edge itself right after. Result: ZERO sentinels,
+zero spurious warnings, input correctly recorded. Lesson: when an operation
+declares provenance *after* the artifact is created, an enforcement check that
+fires *inside* creation will see an incomplete picture — give the check a way to
+defer to the caller's about-to-be-written edge.
+
+**RESOLVED + VERIFIED (deriva-ml 1.53.0, merged 3667bebf).** Released; cifar
+re-pinned to 1.53.0. Live-verified on a fresh registration (catalog 327, 40
+source files): the add_files registration execution `4AP` now has **0**
+`File_Execution` Input rows and **1** `Dataset_Execution` input edge (the
+`cifar10_source` root dataset), with all 40 files still registered as members.
+O(N)→O(1) confirmed in the real loader flow; no sentinel on the registration
+execution. (The datasets-phase execution still trips the no-input sentinel
+separately — a distinct pre-existing gap, NOT the add_files path.)
