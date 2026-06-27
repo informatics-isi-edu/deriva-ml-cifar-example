@@ -256,7 +256,7 @@ def main(args: argparse.Namespace | None = None) -> int:
             _print_done("DATASETS PHASE COMPLETE", f"Catalog ID: {catalog_id}")
             return 0
 
-    if phase in ("all", "cleanup"):
+    if phase in ("all", "cleanup") and not args.dry_run:
         keep = getattr(args, "keep_source_cache", False)
         if not keep:
             _run_cleanup_phase()
