@@ -152,3 +152,15 @@ def test_extract_writes_pngs_and_returns_labels(tmp_path):
     assert labels["img_0"] == "airplane"
     assert labels["img_2"] == "bird"
     assert labels["img_4"] == "deer"
+
+
+def test_write_labels_manifest_round_trips(tmp_path):
+    from scripts._cifar10_source import write_labels_manifest
+
+    labels = {"frog_42": "frog", "cat_7": "cat"}
+    path = write_labels_manifest(tmp_path, labels)
+    assert path == tmp_path / "labels.csv"
+    rows = path.read_text().strip().splitlines()
+    assert rows[0] == "filename,class"
+    assert "frog_42.png,frog" in rows
+    assert "cat_7.png,cat" in rows

@@ -13,6 +13,7 @@ on both train and test, unlike the Kaggle competition format.
 
 from __future__ import annotations
 
+import csv
 import logging
 import pickle
 import shutil
@@ -27,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 CIFAR10_URL = "https://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz"
 DEFAULT_CACHE_DIR = Path.home() / ".cache" / "deriva-ml-model-template"
+CIFAR10_SOURCE_CACHE = DEFAULT_CACHE_DIR / "cifar10_source"
 
 
 def download_cifar10_archive(cache_path: Path | None = None) -> Path:
@@ -157,3 +159,34 @@ def extract_cifar10_to_png(
     shutil.rmtree(extract_root)
 
     return train_dir, test_dir, labels
+
+
+def write_labels_manifest(root: Path, labels: dict[str, str]) -> Path:
+    """Write a filename->class manifest to ``root/labels.csv``.
+
+    Keys of ``labels`` are filename stems (no extension); each row is
+    ``<stem>.png,<class>``. This is the durable, registered label source the
+    decoupled upload execution reads (no in-memory labels dict crosses the
+    execution boundary).
+
+    Args:
+        root: Directory to write the manifest into.
+        labels: Mapping of filename stem (no extension) to class name.
+
+    Returns:
+        Path to the written manifest file (``root/labels.csv``).
+
+    Example:
+        >>> from pathlib import Path
+        >>> labels = {"frog_42": "frog", "cat_7": "cat"}
+        >>> manifest = write_labels_manifest(Path("/tmp"), labels)
+        >>> manifest.name
+        'labels.csv'
+    """
+    manifest = root / "labels.csv"
+    with manifest.open("w", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(["filename", "class"])
+        for stem, cls in sorted(labels.items()):
+            writer.writerow([f"{stem}.png", cls])
+    return manifest
