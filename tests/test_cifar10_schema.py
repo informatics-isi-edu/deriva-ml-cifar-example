@@ -32,6 +32,18 @@ def test_module_exposes_expected_api():
         assert callable(fn)
 
 
+def test_cifar_source_dataset_type_is_declared():
+    """Verify CIFAR_Source dataset type is declared in the module.
+
+    The module exposes CIFAR_Source in its DATASET_TYPES list, which
+    the setup_dataset_types function will seed into the catalog.
+    """
+    import scripts._cifar10_schema as schema
+
+    src = open(schema.__file__).read()
+    assert "CIFAR_Source" in src
+
+
 def test_lookup_alias_target_returns_none_on_failure():
     """Resolution failures must downgrade to None, not raise.
 

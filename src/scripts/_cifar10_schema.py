@@ -71,6 +71,11 @@ DATASET_TYPES: list[tuple[str, str, list[str]]] = [
         "A dataset containing records without ground truth labels",
         ["unlabeled", "unannotated"],
     ),
+    (
+        "CIFAR_Source",
+        "Source files a CIFAR-10 ingest registered by reference (the upload's Input provenance).",
+        [],
+    ),
 ]
 
 
