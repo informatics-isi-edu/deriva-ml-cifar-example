@@ -368,6 +368,18 @@ def setup_workflow_types(ml: DerivaML) -> None:
             ),
         )
 
+    if "CIFAR_Source_Registration" not in existing_types:
+        logger.info("Creating CIFAR_Source_Registration workflow type...")
+        ml.add_term(
+            table="Workflow_Type",
+            term_name="CIFAR_Source_Registration",
+            description=(
+                "Execution 1 of the two-execution CIFAR ingest: stage sampled "
+                "source images into a stable cache and register them as a named, "
+                "nested File dataset tree (Input provenance for Execution 2)."
+            ),
+        )
+
 
 def setup_dataset_types(ml: DerivaML) -> None:
     """Ensure required dataset types exist in Dataset_Type vocabulary.

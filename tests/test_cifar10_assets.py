@@ -125,7 +125,9 @@ def test_stratified_sample_warns_when_below_class_count(caplog):
     from scripts._cifar10_assets import stratified_sample_by_class
 
     paths, labels = _make_class_balanced_corpus(per_class=10)
-    with caplog.at_level(logging.WARNING, logger="scripts._cifar10_assets"):
+    # stratified_sample_by_class now lives in _cifar10_register; its
+    # logger is scripts._cifar10_register (moved in Task 5).
+    with caplog.at_level(logging.WARNING, logger="scripts._cifar10_register"):
         sample = stratified_sample_by_class(paths, labels, sample_size=5, seed=42)
 
     assert len(sample) == 5

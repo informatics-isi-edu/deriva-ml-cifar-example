@@ -35,7 +35,6 @@ Public API:
 from __future__ import annotations
 
 import logging
-import random
 import re
 import shutil
 import tempfile
@@ -50,190 +49,17 @@ from deriva_ml.execution import ExecutionConfiguration
 
 from scripts._cifar10_source import download_cifar10_archive, extract_cifar10_to_png
 
-# Default seed for reproducible stratified sampling. CIFAR-10 has 10
-# classes; when the requested sample size is below 10 we cannot give
-# every class at least one representative and we fall back to a
-# deterministic first-N sample with a warning.
-DEFAULT_SAMPLE_SEED = 42
-
-logger = logging.getLogger(__name__)
-
-CIFAR10_CLASSES_FROZEN = frozenset(
-    {
-        "airplane",
-        "automobile",
-        "bird",
-        "cat",
-        "deer",
-        "dog",
-        "frog",
-        "horse",
-        "ship",
-        "truck",
-    }
+# Helpers moved to _cifar10_register.py (Task 5); re-exported here so
+# existing callers and tests that import from _cifar10_assets continue
+# to work until this module is fully retired in Task 7.
+from scripts._cifar10_register import (  # noqa: F401  (re-export)
+    DEFAULT_SAMPLE_SEED,
+    CIFAR10_CLASSES_FROZEN,
+    class_from_filename,
+    stratified_sample_by_class,
 )
 
-
-def class_from_filename(filename: str) -> str | None:
-    """Decode the CIFAR-10 class from an image filename.
-
-    Image filenames produced by Stage 2a have the shape
-    ``train_<class>_<id>.png`` or ``test_<class>_<id>.png``,
-    where ``<class>`` is one of the ten CIFAR-10 class names.
-    This helper extracts the class name; returns ``None`` if
-    the filename doesn't follow the expected pattern or the
-    decoded class isn't a known CIFAR-10 class.
-
-    Args:
-        filename: Image filename (with or without leading path).
-
-    Returns:
-        The class name if the filename decodes cleanly,
-        otherwise ``None``.
-
-    Example:
-        >>> class_from_filename("train_frog_42.png")
-        'frog'
-        >>> class_from_filename("test_cat_19.png")
-        'cat'
-        >>> class_from_filename("random.png") is None
-        True
-    """
-    stem = Path(filename).name
-    parts = stem.split("_")
-    if len(parts) < 3:
-        return None
-    if parts[0] not in ("train", "test"):
-        return None
-    candidate = parts[1]
-    if candidate not in CIFAR10_CLASSES_FROZEN:
-        return None
-    return candidate
-
-
-def stratified_sample_by_class(
-    items: list[Path],
-    labels: dict[str, str],
-    sample_size: int | None,
-    seed: int = DEFAULT_SAMPLE_SEED,
-) -> list[Path]:
-    """Pick a class-balanced sample of image paths.
-
-    Groups ``items`` by their CIFAR-10 class (looked up in ``labels``
-    via each path's stem) and returns ``sample_size`` paths split as
-    evenly as possible across the classes present. The result preserves
-    determinism for a given ``seed``: each class's items are shuffled
-    with the seed, the per-class quota is taken from the front, and
-    the concatenated result is shuffled once more.
-
-    Args:
-        items: Candidate image paths. Items whose stem is missing from
-            ``labels`` are skipped.
-        labels: Mapping of ``image_stem -> class_name`` (the same
-            mapping returned by :func:`extract_cifar10_to_png`).
-        sample_size: How many paths to return. If ``None`` or larger
-            than ``len(items)``, returns all known-class items shuffled
-            deterministically.
-        seed: Seed for the per-class and final shuffles. Default 42.
-
-    Returns:
-        A list of up to ``sample_size`` image paths with roughly
-        balanced class representation.
-
-    Notes:
-        When ``sample_size`` is smaller than the number of available
-        classes, every class cannot be represented; the function still
-        spreads quota one-per-class until the budget is exhausted and
-        emits a warning so callers know the resulting sample is biased.
-
-    Example:
-        >>> # 5 classes, 10 paths, balanced sample of 5
-        >>> paths = [Path(f"x_{i}.png") for i in range(10)]
-        >>> labs = {p.stem: ["a", "b", "c", "d", "e"][i % 5]
-        ...         for i, p in enumerate(paths)}
-        >>> sample = stratified_sample_by_class(paths, labs, 5, seed=1)
-        >>> sorted(labs[p.stem] for p in sample)
-        ['a', 'b', 'c', 'd', 'e']
-    """
-    # Group by class. Skip items whose label can't be resolved.
-    by_class: dict[str, list[Path]] = {}
-    for path in items:
-        cls = labels.get(path.stem)
-        if cls is None:
-            continue
-        by_class.setdefault(cls, []).append(path)
-
-    total_known = sum(len(v) for v in by_class.values())
-    if sample_size is None or sample_size >= total_known:
-        # Take everything we know, but still shuffle deterministically
-        # so downstream slicing (e.g. train/test halves) is class-mixed.
-        rng = random.Random(seed)
-        flat = [p for v in by_class.values() for p in v]
-        rng.shuffle(flat)
-        return flat
-
-    num_classes = len(by_class)
-    if num_classes == 0:
-        return []
-
-    if sample_size < num_classes:
-        logger.warning(
-            "Stratified sample requested for %d items but %d classes "
-            "are available; result will be class-biased (every class "
-            "cannot be represented at this size).",
-            sample_size,
-            num_classes,
-        )
-
-    # Deterministic per-class shuffle, then assign the quota.
-    class_rng = random.Random(seed)
-    sorted_classes = sorted(by_class.keys())  # stable ordering across runs
-    shuffled_by_class: dict[str, list[Path]] = {}
-    for cls in sorted_classes:
-        bucket = list(by_class[cls])
-        class_rng.shuffle(bucket)
-        shuffled_by_class[cls] = bucket
-
-    base_quota = sample_size // num_classes
-    remainder = sample_size % num_classes
-
-    picked: list[Path] = []
-    # Each class gets base_quota, plus the first ``remainder`` classes
-    # (after a deterministic shuffle of the class order) get one extra
-    # so the remainder is spread, not biased to alphabetical leaders.
-    order_rng = random.Random(seed + 1)
-    class_order = list(sorted_classes)
-    order_rng.shuffle(class_order)
-    extras = set(class_order[:remainder])
-
-    for cls in sorted_classes:
-        quota = base_quota + (1 if cls in extras else 0)
-        bucket = shuffled_by_class[cls]
-        picked.extend(bucket[:quota])
-
-    # If a class had fewer items than its quota, top up from other
-    # classes' remainders so we still return ``sample_size`` items.
-    if len(picked) < sample_size:
-        already = set(picked)
-        leftover: list[Path] = []
-        for cls in sorted_classes:
-            bucket = shuffled_by_class[cls]
-            quota = base_quota + (1 if cls in extras else 0)
-            leftover.extend(bucket[quota:])
-        # Deterministic shuffle of leftovers for fairness.
-        leftover_rng = random.Random(seed + 2)
-        leftover_rng.shuffle(leftover)
-        for path in leftover:
-            if len(picked) >= sample_size:
-                break
-            if path in already:
-                continue
-            picked.append(path)
-
-    # Final shuffle so subsequent slicing isn't class-clustered.
-    final_rng = random.Random(seed + 3)
-    final_rng.shuffle(picked)
-    return picked
+logger = logging.getLogger(__name__)
 
 
 def _create_upload_progress_callback(
