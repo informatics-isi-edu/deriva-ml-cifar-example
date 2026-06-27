@@ -13,7 +13,7 @@ Toronto train/test split at the provenance layer.  Execution 2
 Public API:
     - ``stage_source(max_images, cache_root)`` — download + extract +
       stratified-sample → populate ``cache_root/train`` and
-      ``cache_root/test`` with symlinks, write ``labels.csv``,
+      ``cache_root/test`` with the sampled PNGs, write ``labels.csv``,
       return ``cache_root``.
     - ``run_register_phase(ml, max_images, cache_root)`` — create
       Execution 1, call ``exe.add_files(...)`` on the staged tree,
@@ -34,6 +34,7 @@ from __future__ import annotations
 import logging
 import random
 import shutil
+import tempfile
 from pathlib import Path
 
 from deriva_ml import DerivaML
@@ -255,7 +256,7 @@ def stage_source(
     """Download, extract, and stage a sampled CIFAR-10 source tree.
 
     Populates ``cache_root/train/`` and ``cache_root/test/`` with
-    symlinks to the sampled PNGs (no byte copy) and writes a
+    copies of the sampled PNGs and writes a
     ``labels.csv`` manifest at ``cache_root/``.  Any prior contents of
     ``cache_root`` are removed before staging so the directory always
     reflects exactly the current sample.
@@ -287,39 +288,45 @@ def stage_source(
 
     archive_path = download_cifar10_archive()  # DOMAIN: replace for your data
 
-    # Extract into a subdirectory of cache_root so symlink targets stay
-    # alive for the lifetime of the cache.  The ``_extract/`` dir and the
-    # ``train/``/``test/`` symlink dirs are both under cache_root; the
-    # entire tree is cleared atomically by ``shutil.rmtree(cache_root)``
-    # at the top of the next call — no stale targets accumulate.
-    extract_root = cache_root / "_extract"
-    train_dir, test_dir, labels = extract_cifar10_to_png(archive_path, extract_root)
+    # Extract into a temp dir OUTSIDE cache_root, then COPY only the sampled
+    # files into cache_root/train + cache_root/test.  This is deliberate: the
+    # register phase hands ``cache_root`` to ``FileSpec.create_filespecs``,
+    # which walks the WHOLE subtree recursively — so cache_root must contain
+    # *only* the files we intend to register.  An earlier version extracted
+    # into ``cache_root/_extract`` and symlinked; ``create_filespecs`` then
+    # walked the full ~60K-file extraction (not just the sample) and stalled
+    # for tens of minutes in per-file validation (see tacit-knowledge tk-013).
+    # The byte copy is ~``max_images`` tiny PNGs — negligible.
+    with tempfile.TemporaryDirectory(prefix="cifar10_extract_") as tmp:
+        train_dir, test_dir, labels = extract_cifar10_to_png(archive_path, Path(tmp))
 
-    # Class-balanced sampling — split max_images evenly between splits.  # DOMAIN: replace for your data
-    if max_images is not None:
-        train_limit = max_images // 2
-        test_limit = max_images - train_limit
-    else:
-        train_limit = None
-        test_limit = None
+        # Class-balanced sampling — split max_images evenly between splits.  # DOMAIN: replace for your data
+        if max_images is not None:
+            train_limit = max_images // 2
+            test_limit = max_images - train_limit
+        else:
+            train_limit = None
+            test_limit = None
 
-    all_train = sorted(train_dir.glob("*.png"))
-    all_test = sorted(test_dir.glob("*.png"))
-    train_paths = stratified_sample_by_class(
-        all_train, labels, train_limit, seed=DEFAULT_SAMPLE_SEED
-    )
-    test_paths = stratified_sample_by_class(
-        all_test, labels, test_limit, seed=DEFAULT_SAMPLE_SEED + 1
-    )
+        all_train = sorted(train_dir.glob("*.png"))
+        all_test = sorted(test_dir.glob("*.png"))
+        train_paths = stratified_sample_by_class(
+            all_train, labels, train_limit, seed=DEFAULT_SAMPLE_SEED
+        )
+        test_paths = stratified_sample_by_class(
+            all_test, labels, test_limit, seed=DEFAULT_SAMPLE_SEED + 1
+        )
 
-    # Symlink the sampled subset into cache_root/train + cache_root/test.
-    # Targets live in cache_root/_extract/{train,test}/ — same tree, so
-    # the symlinks remain valid as long as cache_root is intact.
-    for split, paths in (("train", train_paths), ("test", test_paths)):
-        sub = cache_root / split
-        sub.mkdir(parents=True, exist_ok=True)
-        for img_path in paths:
-            (sub / img_path.name).symlink_to(img_path.resolve())
+        # Copy ONLY the sampled subset into cache_root/{train,test}.  cache_root
+        # ends up holding exactly the sampled files + labels.csv — nothing the
+        # temp extraction leaves behind — so create_filespecs registers exactly
+        # the sample.
+        for split, paths in (("train", train_paths), ("test", test_paths)):
+            sub = cache_root / split
+            sub.mkdir(parents=True, exist_ok=True)
+            for img_path in paths:
+                shutil.copy2(img_path, sub / img_path.name)
+    # temp extraction (the full ~60K corpus) is removed on context exit
 
     # Write labels only for the sampled files (stem -> class).
     sampled_labels = {

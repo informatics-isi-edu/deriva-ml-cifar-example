@@ -518,3 +518,40 @@ recognize. When you need a scratch stash, prefer `git stash push -m "<your
 unique label>" -- <specific paths>` and pop that exact entry by message/index.
 Our own committed work is never affected by this (commits are branch-scoped);
 the hazard is purely the shared *stash stack* and working tree.
+
+<a id="tk-013"></a>
+### tk-013 — Staging bug — `create_filespecs(cache_root)` registered all 60K extracted files because `_extract/` lived inside `cache_root`
+**When:** 2026-06-26T18:30:00-07:00
+**By:** Carl Kesselman (carl@isi.edu)
+**Supported by:** [tk-011](#tk-011) (the lineage gap this two-execution redesign fixes)
+
+First live run of the two-execution loader (`register` phase) hung for 25+
+minutes at ~18% CPU with **zero `File` rows** committed. A process stack sample
+showed it pinned in `_pydantic_core` validation (not network I/O). Root cause:
+the register scaffold's `stage_source` extracted the full CIFAR archive into
+`cache_root/_extract/` (≈60,000 PNGs) and symlinked the 2,000 sampled files into
+`cache_root/train` + `cache_root/test` — keeping `_extract/` *inside* `cache_root`
+so symlink targets stay alive. But `run_register_phase` then calls
+`FileSpec.create_filespecs(cache_root)`, which `rglob("*")`s the **entire**
+`cache_root` — so `add_files` tried to register all **60,001** files (MD5 +
+pydantic-validate each), ~30× the intended 2,000, hence the multi-minute
+pydantic hot loop.
+
+The trap: `create_filespecs(dir)` walks the whole subtree recursively with no
+exclusion. Putting the bulk extraction *under* the directory you hand to
+`create_filespecs` silently balloons the registration to the full corpus. Unit
+tests missed it because they monkeypatched `extract` to write a handful of files
+— the 60K archive only appears in a real run.
+
+Fix (applied): extract to a temp dir **outside** `cache_root`; **copy** (not
+symlink) the sampled files into `cache_root/train` + `cache_root/test`; remove
+the temp extraction. `cache_root` then holds *only* the sampled subset +
+`labels.csv`, so `create_filespecs(cache_root)` registers exactly the sampled
+files while still giving `add_files` the single nested root. The byte copy is
+~2,000 tiny PNGs (~6 MB) — negligible; the "no byte copy / symlink" optimization
+only mattered for the full 60K corpus, not a sample.
+
+Implications for collaborators: whatever directory you pass to
+`create_filespecs`/`add_files` must contain **only** the files you intend to
+register — no scratch/extraction subdirs. Stage the exact set into a clean
+directory; don't co-locate bulk working files with the registration root.

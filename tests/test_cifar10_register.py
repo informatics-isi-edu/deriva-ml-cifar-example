@@ -106,6 +106,56 @@ def test_stage_source_labels_csv_covers_sampled_files(tmp_path, monkeypatch):
     )
 
 
+def _fake_extract_with_extras(
+    archive: Path, out: Path
+) -> tuple[Path, Path, dict[str, str]]:
+    """Like _fake_extract but also writes extra junk files into ``out`` —
+    mimicking the real extractor, which unpacks the FULL ~60K-file corpus
+    plus scratch dirs into the extraction target. Used to prove cache_root
+    does NOT pick up anything beyond the sampled files (regression for the
+    tk-013 staging bug, where create_filespecs(cache_root) walked the whole
+    extraction)."""
+    train_dir, test_dir, labels = _fake_extract(archive, out)
+    # extra files in the extraction dir that must NOT end up under cache_root
+    (out / "batches.meta").write_text("meta")
+    (out / "train" / "unsampled_extra.png").write_bytes(b"x")
+    (out / "_scratch").mkdir(exist_ok=True)
+    (out / "_scratch" / "junk.bin").write_bytes(b"y")
+    return train_dir, test_dir, labels
+
+
+def test_stage_source_cache_root_holds_only_sampled_files(tmp_path, monkeypatch):
+    """cache_root must contain ONLY the sampled PNGs + labels.csv — no
+    extraction scratch, no full corpus. This is what create_filespecs walks,
+    so leaking the extraction here would register thousands of extra files
+    (tk-013)."""
+    import scripts._cifar10_register as reg
+
+    monkeypatch.setattr(reg, "extract_cifar10_to_png", _fake_extract_with_extras)
+    monkeypatch.setattr(
+        reg, "download_cifar10_archive", lambda: tmp_path / "fake.tar.gz"
+    )
+
+    root = reg.stage_source(max_images=4, cache_root=tmp_path / "src")
+
+    # No extraction scratch leaked into cache_root.
+    assert not (root / "_extract").exists(), "_extract/ leaked into cache_root"
+    assert not (root / "_scratch").exists(), "_scratch/ leaked into cache_root"
+    assert not (root / "batches.meta").exists(), "extraction junk leaked"
+
+    # Every file under cache_root is either a staged PNG or labels.csv —
+    # nothing else. (This is the exact set create_filespecs would register.)
+    all_files = {p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file()}
+    pngs = {f for f in all_files if f.endswith(".png")}
+    others = all_files - pngs
+    assert others == {"labels.csv"}, (
+        f"unexpected non-PNG files under cache_root: {others}"
+    )
+    # exactly the 4 sampled images, not the extra unsampled one
+    assert len(pngs) == 4, f"expected 4 sampled PNGs, got {len(pngs)}: {sorted(pngs)}"
+    assert "train/unsampled_extra.png" not in all_files
+
+
 def test_module_exposes_expected_api():
     """Public API surface check."""
     from scripts._cifar10_register import (
