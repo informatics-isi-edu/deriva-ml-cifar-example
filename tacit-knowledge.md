@@ -489,3 +489,32 @@ execution-mediated and must be traversed by hand. If automatic dataset→source
 lineage is a requirement, it would need an explicit `Dataset_Dataset` edge from
 the image Complete dataset to the source File root, which `add_files` does not
 create (see [tk-005](#tk-005)).
+
+<a id="tk-012"></a>
+### tk-012 — Operational hazard — the `../deriva-ml` repo is a shared multi-agent working tree; never blind `git stash pop` there
+**When:** 2026-06-26T00:00:00-07:00
+**By:** Carl Kesselman (carl@isi.edu)
+
+While preparing to merge + release a `deriva-ml` change, a `git stash pop` in
+`../deriva-ml` accidentally applied **another agent's stash** (`stash@{0}`,
+labeled *"current-mods on other agent's branch — need to move to my branch"*),
+spilling unrelated denormalize/local_db work into the tree as `UU`/`DU`
+conflicts. The `deriva-ml` repo carries **~10 stashes from multiple
+agents/branches** (audit-thread, denormalize-user-guide, describe-warnings, …)
+— it is a busy shared working tree, not a private one.
+
+Recovery was non-destructive only because **`git stash pop` that hits conflicts
+does NOT drop the stash** — `stash@{0}` stayed intact, so the other agent's work
+was never at risk. The conflict-spilled tree copy was redundant; restoring the
+unmerged paths to `HEAD` (`git checkout -f HEAD -- <file>` for `UU`; `git rm` for
+the `DU` file absent in HEAD) cleaned the tree while leaving the stash for its
+owner to pop onto their own branch.
+
+Implications for collaborators: in `../deriva-ml` (and likely the other
+shared workspace repos), do **not** run bare `git stash`/`git stash pop` — a pop
+grabs whatever is at `stash@{0}`, which is probably someone else's. Inspect
+`git stash list` first and pop by explicit ref only for a stash you created and
+recognize. When you need a scratch stash, prefer `git stash push -m "<your
+unique label>" -- <specific paths>` and pop that exact entry by message/index.
+Our own committed work is never affected by this (commits are branch-scoped);
+the hazard is purely the shared *stash stack* and working tree.
