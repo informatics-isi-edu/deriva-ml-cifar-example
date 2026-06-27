@@ -616,3 +616,35 @@ input MUST set `materialize=False` on its `DatasetSpec`. The default `True` will
 fail bag validation. This is a general constraint on by-reference datasets, not
 CIFAR-specific. (Hatrac-backed asset datasets materialize fine; the limitation is
 specific to local/`tag://`-referenced files.)
+
+<a id="tk-016"></a>
+### tk-016 — `add_files` of ~2000 files legitimately takes a few minutes (pydantic-heavy `resolve_rids` response parsing) — not a hang; and `deriva-ml:File` aggregate count needs auth
+**When:** 2026-06-26T20:00:00-07:00
+**By:** Carl Kesselman (carl@isi.edu)
+**Supported by:** [tk-008](#tk-008) (the resolve_rids chunking this entry characterizes the cost of)
+
+Two diagnostic traps that caused a false "register phase is hung" alarm:
+
+1. **`add_files` of ~2000 files spends minutes in `_pydantic_core` by design.** A
+   process stack sample shows it pinned in recursive pydantic validation with
+   `_buffered_readline` at the base — that is ERMrest **response parsing**: the
+   chunked `resolve_rids` (500 RIDs/query, [tk-008](#tk-008)) returns rows that are
+   validated into models one by one. Isolating just `FileSpec.create_filespecs`
+   over the same 2000-file tree took **0.4 s** — so the time is in the catalog
+   insert / resolution, not spec building. Prior *successful* 2000-file loads
+   (catalogs 133/259/263) took several minutes too. Do **not** kill an `add_files`
+   register phase at 1–2 minutes assuming a hang; give a 2000-file registration
+   ~3–5 minutes, and confirm "stuck" only via *no forward progress* over a longer
+   window, not by a single stack sample showing pydantic.
+
+2. **`/ermrest/catalog/N/aggregate/deriva-ml:File/cnt:=cnt(RID)` returns
+   `[{"cnt":0}]` without auth** even when File rows exist. It is not a reliable
+   "did register run" signal. Verify File rows via `ml.lookup_dataset(<File
+   dataset rid>).list_dataset_members()` (which uses the authenticated session)
+   instead — e.g. catalog 263's File datasets show 1000 members each while the
+   unauthenticated aggregate reported 0.
+
+Implications for collaborators: time-box register-phase patience to minutes, not
+seconds; distinguish "slow but progressing" from "hung" with a *second* sample
+minutes apart, not one; and never use the unauthenticated aggregate endpoint as a
+row-count oracle.
