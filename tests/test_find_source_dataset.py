@@ -10,28 +10,39 @@ import pytest
 from scripts.load_cifar10 import _find_latest_source_dataset_rid
 
 
-def _make_dataset(rid: str, dataset_types: list[str], source_directory: str | None):
+def _make_dataset(
+    rid: str,
+    dataset_types: list[str],
+    source_directory: str | None,
+    is_source_root: bool = False,
+):
     """Return a lightweight stub Dataset object with the required properties.
 
     Args:
         rid: The dataset RID string.
         dataset_types: List of Dataset_Type term names for this dataset.
-        source_directory: The directory path stored on the dataset; the root
-            of an ``add_files`` tree has ``source_directory == "."``.
+        source_directory: The directory path stored on the dataset (its
+            basename for the root of an ``add_files`` tree, ``"train"``/
+            ``"test"`` for the partition children).
+        is_source_root: Whether this dataset is the root of an ``add_files``
+            tree. ``_find_latest_source_dataset_rid`` selects the root via this
+            structural flag, not by matching ``source_directory`` to a string.
 
     Returns:
         A ``types.SimpleNamespace`` instance with ``dataset_rid``,
-        ``dataset_types``, and ``source_directory`` attributes.
+        ``dataset_types``, ``source_directory``, and ``is_source_root``
+        attributes.
 
     Example:
-        >>> d = _make_dataset("2-XXXX", ["CIFAR_Source"], ".")
-        >>> d.dataset_rid
-        '2-XXXX'
+        >>> d = _make_dataset("2-XXXX", ["CIFAR_Source"], "cifar10_source", is_source_root=True)
+        >>> d.is_source_root
+        True
     """
     return types.SimpleNamespace(
         dataset_rid=rid,
         dataset_types=dataset_types,
         source_directory=source_directory,
+        is_source_root=is_source_root,
     )
 
 
@@ -66,19 +77,19 @@ class TestFindLatestSourceDatasetRid:
     def test_returns_root_cifar_source_rid(self):
         """Returns the RID of the root CIFAR_Source dataset, ignoring children and unrelated datasets.
 
-        A root CIFAR_Source dataset has ``source_directory == "."`` and
+        A root CIFAR_Source dataset has ``is_source_root == True`` and
         ``"CIFAR_Source"`` in ``dataset_types``.  Non-root children
-        (``source_directory == "train"``/``"test"``) and unrelated datasets
-        must be ignored.
+        (``source_directory == "train"``/``"test"``, ``is_source_root`` False)
+        and unrelated datasets must be ignored.
 
         Example:
             This test is deterministic and requires no catalog connection.
         """
         datasets = [
-            _make_dataset("2-ROOT", ["CIFAR_Source"], "."),
-            _make_dataset("2-TRAIN", ["CIFAR_Source"], "train"),
-            _make_dataset("2-TEST", ["CIFAR_Source"], "test"),
-            _make_dataset("2-OTHER", ["SomeOtherType"], "."),
+            _make_dataset("2-ROOT", ["CIFAR_Source"], "cifar10_source", is_source_root=True),
+            _make_dataset("2-TRAIN", ["CIFAR_Source"], "train", is_source_root=False),
+            _make_dataset("2-TEST", ["CIFAR_Source"], "test", is_source_root=False),
+            _make_dataset("2-OTHER", ["SomeOtherType"], "cifar10_source", is_source_root=True),
         ]
         ml = _make_ml(datasets)
         rid = _find_latest_source_dataset_rid(ml)
@@ -91,8 +102,8 @@ class TestFindLatestSourceDatasetRid:
             This test is deterministic and requires no catalog connection.
         """
         datasets = [
-            _make_dataset("2-TRAIN", ["CIFAR_Source"], "train"),
-            _make_dataset("2-OTHER", ["SomeOtherType"], "."),
+            _make_dataset("2-TRAIN", ["CIFAR_Source"], "train", is_source_root=False),
+            _make_dataset("2-OTHER", ["SomeOtherType"], "cifar10_source", is_source_root=True),
         ]
         ml = _make_ml(datasets)
         with pytest.raises(RuntimeError, match="CIFAR_Source"):
@@ -110,8 +121,8 @@ class TestFindLatestSourceDatasetRid:
         """
         # Newest first, as find_datasets(sort=True) would return them.
         datasets = [
-            _make_dataset("2-NEWER", ["CIFAR_Source"], "."),
-            _make_dataset("2-OLDER", ["CIFAR_Source"], "."),
+            _make_dataset("2-NEWER", ["CIFAR_Source"], "cifar10_source", is_source_root=True),
+            _make_dataset("2-OLDER", ["CIFAR_Source"], "cifar10_source", is_source_root=True),
         ]
         ml = _make_ml(datasets)
         rid = _find_latest_source_dataset_rid(ml)

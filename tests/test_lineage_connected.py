@@ -211,12 +211,12 @@ def test_source_image_lineage_connected_via_shared_execution():
         source_root_rid: str | None = None
         for row in cifar_source_rows:
             ds = ml.lookup_dataset(row["Dataset"])
-            if ds.source_directory == ".":
+            if ds.is_source_root:
                 source_root_rid = row["Dataset"]
                 break
 
         assert source_root_rid is not None, (
-            f"Could not find a CIFAR_Source dataset with source_directory == '.'. "
+            f"Could not find a CIFAR_Source dataset that is_source_root. "
             f"Candidates: {[r['Dataset'] for r in cifar_source_rows]}"
         )
 

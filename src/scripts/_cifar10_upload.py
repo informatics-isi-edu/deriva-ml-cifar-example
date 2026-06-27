@@ -316,8 +316,9 @@ def run_upload_phase(
     test_count = 0
 
     # Read the labels manifest from the root File dataset's labels.csv member.
-    # The root dataset (source_directory ".") holds labels.csv; partition
-    # children (source_directory "train" / "test") hold the images.
+    # The root dataset (the add_files tree root, identified via is_source_root)
+    # holds labels.csv; partition children (source_directory "train" / "test")
+    # hold the images.
     root_members = source_ds.list_dataset_members()
     file_records = root_members.get("File", [])  # DOMAIN: replace for your data
     # NOTE: add_files leaves File.Filename NULL — the name lives in the URL tag
