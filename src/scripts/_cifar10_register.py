@@ -34,7 +34,6 @@ from __future__ import annotations
 import logging
 import random
 import shutil
-import tempfile
 from pathlib import Path
 
 from deriva_ml import DerivaML
@@ -44,7 +43,7 @@ from deriva_ml.execution import ExecutionConfiguration
 from scripts._cifar10_source import (
     CIFAR10_SOURCE_CACHE,
     download_cifar10_archive,
-    extract_cifar10_to_png,
+    extract_cifar10_sample_to_png,
     write_labels_manifest,
 )
 
@@ -288,56 +287,38 @@ def stage_source(
 
     archive_path = download_cifar10_archive()  # DOMAIN: replace for your data
 
-    # Extract into a temp dir OUTSIDE cache_root, then COPY only the sampled
-    # files into cache_root/train + cache_root/test.  This is deliberate: the
-    # register phase hands ``cache_root`` to ``FileSpec.create_filespecs``,
-    # which walks the WHOLE subtree recursively — so cache_root must contain
-    # *only* the files we intend to register.  An earlier version extracted
-    # into ``cache_root/_extract`` and symlinked; ``create_filespecs`` then
-    # walked the full ~60K-file extraction (not just the sample) and stalled
-    # for tens of minutes in per-file validation (see tacit-knowledge tk-013).
-    # The byte copy is ~``max_images`` tiny PNGs — negligible.
-    with tempfile.TemporaryDirectory(prefix="cifar10_extract_") as tmp:
-        train_dir, test_dir, labels = extract_cifar10_to_png(archive_path, Path(tmp))
+    # Decode + class-balanced-sample at extract time: only the sampled PNGs are
+    # ever written, straight into cache_root.  The register phase hands
+    # ``cache_root`` to ``FileSpec.create_filespecs`` (which walks the WHOLE
+    # subtree), so cache_root must contain *exactly* the files we intend to
+    # register and nothing else.  Sampling during decode means no un-sampled
+    # file ever touches disk — no temp extraction to walk, no copy, no symlink,
+    # no prune.  (Earlier versions extracted the full ~60K corpus into
+    # cache_root and then create_filespecs walked all of it; see tk-013.)
+    if max_images is not None:  # DOMAIN: replace for your data
+        train_limit = max_images // 2
+        test_limit = max_images - train_limit
+    else:
+        train_limit = None
+        test_limit = None
 
-        # Class-balanced sampling — split max_images evenly between splits.  # DOMAIN: replace for your data
-        if max_images is not None:
-            train_limit = max_images // 2
-            test_limit = max_images - train_limit
-        else:
-            train_limit = None
-            test_limit = None
+    train_dir, test_dir, labels = extract_cifar10_sample_to_png(
+        archive_path,
+        cache_root,
+        train_limit=train_limit,
+        test_limit=test_limit,
+        seed=DEFAULT_SAMPLE_SEED,
+    )
+    train_count = len(list(train_dir.glob("*.png")))
+    test_count = len(list(test_dir.glob("*.png")))
 
-        all_train = sorted(train_dir.glob("*.png"))
-        all_test = sorted(test_dir.glob("*.png"))
-        train_paths = stratified_sample_by_class(
-            all_train, labels, train_limit, seed=DEFAULT_SAMPLE_SEED
-        )
-        test_paths = stratified_sample_by_class(
-            all_test, labels, test_limit, seed=DEFAULT_SAMPLE_SEED + 1
-        )
-
-        # Copy ONLY the sampled subset into cache_root/{train,test}.  cache_root
-        # ends up holding exactly the sampled files + labels.csv — nothing the
-        # temp extraction leaves behind — so create_filespecs registers exactly
-        # the sample.
-        for split, paths in (("train", train_paths), ("test", test_paths)):
-            sub = cache_root / split
-            sub.mkdir(parents=True, exist_ok=True)
-            for img_path in paths:
-                shutil.copy2(img_path, sub / img_path.name)
-    # temp extraction (the full ~60K corpus) is removed on context exit
-
-    # Write labels only for the sampled files (stem -> class).
-    sampled_labels = {
-        p.stem: labels[p.stem] for p in train_paths + test_paths if p.stem in labels
-    }
-    write_labels_manifest(cache_root, sampled_labels)  # DOMAIN: replace for your data
+    # ``labels`` already covers exactly the sampled files (stem -> class).
+    write_labels_manifest(cache_root, labels)  # DOMAIN: replace for your data
 
     logger.info(
         "Staged %d train + %d test source images to %s",
-        len(train_paths),
-        len(test_paths),
+        train_count,
+        test_count,
         cache_root,
     )
     return cache_root

@@ -164,3 +164,30 @@ def test_write_labels_manifest_round_trips(tmp_path):
     assert rows[0] == "filename,class"
     assert "frog_42.png,frog" in rows
     assert "cat_7.png,cat" in rows
+
+
+def test_stratified_pick_is_class_balanced_and_deterministic():
+    """_stratified_pick keeps `limit` items spread evenly across classes,
+    reproducibly, and keeps everything when limit is None/over-large."""
+    from scripts._cifar10_source import _stratified_pick
+    from collections import Counter
+
+    items = [(None, c, f"{c}_{i}") for c in ("a", "b", "c") for i in range(10)]
+
+    pick = _stratified_pick(items, limit=9, seed=1)
+    assert len(pick) == 9
+    assert dict(Counter(c for _, c, _ in pick)) == {"a": 3, "b": 3, "c": 3}
+
+    # deterministic for a fixed seed
+    pick2 = _stratified_pick(items, limit=9, seed=1)
+    assert [f for _, _, f in pick] == [f for _, _, f in pick2]
+
+    # None / over-large limit keeps everything
+    assert len(_stratified_pick(items, None, 1)) == 30
+    assert len(_stratified_pick(items, 100, 1)) == 30
+
+    # uneven remainder distributed deterministically (10 across 3 classes)
+    pick3 = _stratified_pick(items, limit=10, seed=1)
+    assert len(pick3) == 10
+    dist = Counter(c for _, c, _ in pick3)
+    assert sorted(dist.values()) == [3, 3, 4]

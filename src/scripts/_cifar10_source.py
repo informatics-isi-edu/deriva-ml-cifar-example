@@ -16,10 +16,13 @@ from __future__ import annotations
 import csv
 import logging
 import pickle
+import random
 import shutil
 import tarfile
+import tempfile
 import urllib.request
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 from PIL import Image
@@ -157,6 +160,120 @@ def extract_cifar10_to_png(
 
     # Clean up the temporary extraction directory.
     shutil.rmtree(extract_root)
+
+    return train_dir, test_dir, labels
+
+
+def _stratified_pick(
+    items: list[tuple[Any, str, str]], limit: int | None, seed: int
+) -> list[tuple[Any, str, str]]:
+    """Class-balanced pick of ``limit`` items from decoded CIFAR records.
+
+    Args:
+        items: Decoded records as ``(image_array, class_name, filename)``.
+        limit: Total number to keep, spread as evenly as possible across
+            classes. ``None`` keeps everything (no sampling).
+        seed: RNG seed for a reproducible pick.
+
+    Returns:
+        The selected subset of ``items`` (a list, order not significant).
+
+    Example:
+        >>> picked = _stratified_pick(items, limit=100, seed=42)  # doctest: +SKIP
+        >>> len(picked)
+        100
+    """
+    if limit is None or limit >= len(items):
+        return items
+
+    rng = random.Random(seed)
+    by_class: dict[str, list[tuple[Any, str, str]]] = {}
+    for rec in items:
+        by_class.setdefault(rec[1], []).append(rec)
+    for recs in by_class.values():
+        rng.shuffle(recs)
+
+    classes = sorted(by_class)
+    base, extra = divmod(limit, len(classes))
+    picked: list[tuple[Any, str, str]] = []
+    # Give ``extra`` leftover slots to the first classes (deterministic order).
+    for i, cls in enumerate(classes):
+        want = base + (1 if i < extra else 0)
+        picked.extend(by_class[cls][:want])
+    return picked
+
+
+def extract_cifar10_sample_to_png(
+    archive_path: Path,
+    output_dir: Path,
+    train_limit: int | None,
+    test_limit: int | None,
+    seed: int = 42,
+) -> tuple[Path, Path, dict[str, str]]:
+    """Extract a *sampled* CIFAR-10 PNG tree directly into ``output_dir``.
+
+    Decodes the pickle batches in memory, class-balanced-samples the
+    requested counts, and writes **only the sampled PNGs** into
+    ``output_dir/train/`` and ``output_dir/test/``. Nothing un-sampled is
+    ever written to disk — so ``output_dir`` is safe to hand straight to
+    ``FileSpec.create_filespecs`` for by-reference registration (it contains
+    exactly the sample). The archive's tar is unpacked to a temp dir that is
+    removed before return.
+
+    Args:
+        archive_path: Path to ``cifar-10-python.tar.gz``.
+        output_dir: Directory to write ``train/`` and ``test/`` into; created
+            if missing. Only the sampled PNGs land here.
+        train_limit: Number of training images to keep (class-balanced).
+            ``None`` keeps all ~50K.
+        test_limit: Number of test images to keep (class-balanced). ``None``
+            keeps all ~10K.
+        seed: RNG seed; the test split uses ``seed + 1`` so the two splits
+            sample independently but reproducibly.
+
+    Returns:
+        ``(train_dir, test_dir, labels)`` where ``labels`` maps
+        ``filename_stem -> class_name`` for the *sampled* files only.
+
+    Example:
+        >>> train, test, labels = extract_cifar10_sample_to_png(
+        ...     Path("cifar-10-python.tar.gz"), Path("./out"), 1000, 1000
+        ... )  # doctest: +SKIP
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    train_dir = output_dir / "train"
+    test_dir = output_dir / "test"
+    train_dir.mkdir(exist_ok=True)
+    test_dir.mkdir(exist_ok=True)
+
+    with tempfile.TemporaryDirectory(prefix="cifar10_tar_") as tmp:
+        with tarfile.open(archive_path, "r:gz") as tar:
+            tar.extractall(tmp, filter="data")
+        batches_dir = Path(tmp) / "cifar-10-batches-py"
+
+        with (batches_dir / "batches.meta").open("rb") as fh:
+            meta = pickle.load(fh, encoding="bytes")
+        class_names = [name.decode("utf-8") for name in meta[b"label_names"]]
+
+        def decode(batch_paths: list[Path]) -> list[tuple[Any, str, str]]:
+            items: list[tuple[Any, str, str]] = []
+            for bp in batch_paths:
+                images, lbl_ints, filenames = load_batch(bp)
+                for img, lbl, fname in zip(images, lbl_ints, filenames):
+                    items.append((img, class_names[lbl], fname))
+            return items
+
+        train_items = decode(sorted(batches_dir.glob("data_batch_*")))
+        test_items = decode([batches_dir / "test_batch"])
+
+    train_pick = _stratified_pick(train_items, train_limit, seed)
+    test_pick = _stratified_pick(test_items, test_limit, seed + 1)
+
+    labels: dict[str, str] = {}
+    for sub, picks in ((train_dir, train_pick), (test_dir, test_pick)):
+        for img, cls, fname in picks:
+            Image.fromarray(img).save(sub / fname)
+            labels[Path(fname).stem] = cls
 
     return train_dir, test_dir, labels
 

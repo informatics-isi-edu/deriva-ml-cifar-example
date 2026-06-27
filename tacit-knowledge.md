@@ -555,3 +555,33 @@ Implications for collaborators: whatever directory you pass to
 `create_filespecs`/`add_files` must contain **only** the files you intend to
 register — no scratch/extraction subdirs. Stage the exact set into a clean
 directory; don't co-locate bulk working files with the registration root.
+
+<a id="tk-014"></a>
+### tk-014 — `add_files`-registered File rows have `Filename = NULL`; read the name from the `URL` tag path, not `Filename`
+**When:** 2026-06-26T19:00:00-07:00
+**By:** Carl Kesselman (carl@isi.edu)
+**Supported by:** [tk-013](#tk-013) (same two-execution upload phase)
+
+The upload execution (Exec 2) crashed reading back the registered source File
+dataset: `AttributeError: 'NoneType' object has no attribute 'endswith'` while
+matching the `labels.csv` File by `r.get("Filename", "").endswith("labels.csv")`.
+Inspecting the catalog: the File row's **`Filename` column is `None`**, even
+though its `URL` is `tag://host,date:file:///.../labels.csv`. So
+`add_files` / `FileSpec.create_filespecs` populate the **`URL`** (the tag path)
+but leave **`Filename` NULL** — the by-reference File table does not derive a
+`Filename` from the path. (The `.get("Filename", "")` default is no help: the
+key exists with value `None`, so the default never applies and `None.endswith`
+raises.)
+
+Two consequences the upload code got wrong:
+- Matching the manifest File by `Filename` fails — must match on the **basename
+  of the `URL`** instead (`Path(urlsplit(url).path).name`, or
+  `tag_url_to_path(url).name`).
+- Per-image stem/class lookup likewise can't use `Filename` — derive the stem
+  from the `URL` path too.
+
+Implications for collaborators: when consuming `add_files`-registered File rows,
+treat **`URL` as the source of truth for identity/name**; do NOT rely on
+`Filename` (it is NULL for by-reference files). Guard any `.endswith`/string op
+with `(rec.get("Filename") or "")` if you must touch it, but prefer deriving the
+name from `URL`.

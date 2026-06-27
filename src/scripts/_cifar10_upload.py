@@ -309,8 +309,10 @@ def run_upload_phase(
     # children (source_directory "train" / "test") hold the images.
     root_members = source_ds.list_dataset_members()
     file_records = root_members.get("File", [])  # DOMAIN: replace for your data
+    # NOTE: add_files leaves File.Filename NULL — the name lives in the URL tag
+    # path. Match on the URL basename, not Filename (see tacit-knowledge tk-014).
     labels_record = next(
-        (r for r in file_records if r.get("Filename", "").endswith("labels.csv")),
+        (r for r in file_records if tag_url_to_path(r["URL"]).name == "labels.csv"),
         None,
     )
     if labels_record is None:
@@ -345,18 +347,18 @@ def run_upload_phase(
 
             for file_rec in image_records:
                 url: str = file_rec["URL"]  # DOMAIN: tag URL field name
-                filename: str = file_rec["Filename"]  # DOMAIN: filename field name
+
+                # add_files leaves File.Filename NULL — derive the name from the
+                # URL tag path, not the Filename column (see tk-014).
+                local_path = tag_url_to_path(url)  # DOMAIN
+                filename = local_path.name  # e.g. "cat_2.png"
+                stem = local_path.stem  # e.g. "cat_2"
 
                 # Skip the labels manifest if it somehow appears in a child.
-                if filename.endswith("labels.csv"):
+                if filename == "labels.csv":
                     continue
 
-                local_path = tag_url_to_path(url)  # DOMAIN
-                stem = local_path.stem  # e.g. "cat_2"
-                cls = labels.get(filename)  # DOMAIN: look up by full filename
-                if cls is None:
-                    # Fall back to stem lookup in case manifest uses stems.
-                    cls = labels.get(f"{stem}.png")
+                cls = labels.get(filename)  # DOMAIN: manifest is keyed by filename
                 if cls is None:
                     logger.warning(
                         "No label for %r (stem=%r), skipping", filename, stem
