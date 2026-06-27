@@ -935,3 +935,74 @@ caught both a perf cliff and a guard the first pass and our own review left
 half-applied. A guard added on one of two symmetric code paths (member-producers)
 is a smell to check the other path (the version-producer) — symmetry gaps hide
 latent bugs.
+
+<a id="tk-023"></a>
+### tk-023 — The new `lookup_lineage` member traversal 404s on a real 500-member dataset: `_distinct_member_output_producers` puts ~500 member RIDs in a single URL-PATH `.in_()` filter, blowing Apache's URL length limit
+**When:** 2026-06-27T01:15:00-07:00
+**By:** Carl Kesselman (carl@isi.edu)
+**Supported by:** [tk-018](#tk-018) (the member-producer helper this bug lives in)
+
+First real-world run of the v1.52.0 member-asset traversal —
+`ml.lookup_lineage('1MEP')` on catalog 278's `Small_Testing` dataset (500 Image
+members) — **404'd**, NOT because the traversal logic is wrong but because
+`_distinct_member_output_producers` (the tk-018 helper) builds a single ERMrest
+filter `assoc_path.filter(assoc_path.columns[asset_fk].in_(chunk))` with
+`_MEMBER_PRODUCER_CHUNK=500` member RIDs. ERMrest's `.in_()` renders as a
+**URL-PATH** predicate — `(Image=QZG);(Image=QZR);...` hundreds of times — so 500
+RIDs (~13 chars each → ~6.5 KB just for RIDs) push the request URL past Apache's
+default URL length limit (~8 KB). The server returns a bare HTML 404 ("The
+requested URL was not found"), which surfaces as a `DataPathException`.
+
+Why it was never caught: every prior test of the member traversal used TINY
+member counts — the offline unit mocks bypass the real query entirely, and the
+two live tests (`test_lookup_lineage_descends_into_member_asset_producers`,
+`test_lookup_lineage_reflects_consumed_version_not_latest`) each attach ONE Image
+member. Catalog 278 is the first place the helper ran against a real 500-member
+dataset. The chunk constant being named `_MEMBER_PRODUCER_CHUNK = 500` *looks*
+safe (it mirrors the resolve_rids chunk), but resolve_rids chunks go in a POST
+body while `.in_()` goes in the URL path — different limits. 500 is fine for a
+body, far too many for a path.
+
+Important contrast with [tk-022]: the version-RID `.in_()` we just hardened is
+ALSO at 500, but it never blows the URL because a lineage walk references only a
+handful of DISTINCT consumed-version RIDs (1-3), never 500. The member path is
+the one with hundreds of RIDs, so it is the one that breaks.
+
+Fix (proposed, not yet done): drop `_MEMBER_PRODUCER_CHUNK` to a URL-safe size
+(e.g. 100, ~1.3 KB of RIDs/chunk, comfortably under 8 KB) — or, better, route the
+member→producer query through a server-side membership join (Dataset_<member> →
+<member> → <member>_Execution) so no client-side RID list hits the URL at all
+(the original tk-018 spec named this as the "primary strategy" but the
+chunked-RID fallback shipped). A live regression test MUST use a >=~200-member
+dataset so the URL-length class is actually exercised; a 1-member live test
+proves nothing here.
+
+Lesson: chunk SIZE depends on WHERE the chunk goes. A `.in_()` that renders to a
+URL path is bounded by URL length (~hundreds of short RIDs), not by the
+thousands-per-POST-body limit. And: a "live test" with 1 member is not a
+scale test — size the live fixture to the real failure mode (URL length), not
+just to exercise the code path once.
+
+**RESOLVED (2026-06-27):** implemented in deriva-ml on branch
+`feature/lineage-member-producer-join` — `_distinct_member_output_producers` is
+now a server-side membership join (`Dataset_<member>(Dataset==rid) → <member> →
+<member>_Execution(Output) → distinct Execution`) built on the
+**version-snapshot** pathBuilder; the URL carries only the dataset RID, no
+member-RID list. `_producers_of_dataset_members` discovers member asset tables
+via `find_associations` (no RID enumeration); `_MEMBER_PRODUCER_CHUNK` deleted.
+A live **250-member** regression test passes (the old code 404'd at this scale).
+
+**Bonus edge caught by the live test (snapshot schema-evolution):** building the
+join on a version-snapshot pathBuilder revealed that if a membership table (e.g.
+`Dataset_Image`) was created *after* the snapshot was captured (here, the test's
+`add_dataset_element_type("Image")` ran after the version was stamped), the
+membership table is absent from the snapshot's schema and
+`snapshot_pb.schemas[...].tables["Dataset_Image"]` raises `KeyError` (NOT a 404).
+Fix: guard the membership-table lookup with `try/except KeyError: return set()`
+— semantically correct, because if the table didn't exist at the snapshot, the
+snapshot contains no members of it. General lesson: **a version-snapshot
+pathBuilder reflects the schema AS OF that snapshot** — any table added later is
+simply not there, so snapshot-scoped lookups must tolerate a missing table
+rather than assume the current schema. The third live-caught bug in this lineage
+arc (after tk-019 standalone-upload, tk-021 FK-RID); the pattern holds: live
+tests at realistic scale catch what mocks and tiny fixtures cannot.
