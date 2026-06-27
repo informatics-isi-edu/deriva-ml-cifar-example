@@ -21,12 +21,13 @@ Public API:
       (existing or fresh).
     - ``setup_domain_model(ml)`` — install Image table,
       Image_Class vocab, Image_Classification feature.
-    - ``setup_workflow_types(ml)`` — register the three
+    - ``setup_workflow_types(ml)`` — register the six
       workflow types we use (CIFAR_Data_Load, Image
-      Classification, ROC Analysis Notebook).
-    - ``setup_dataset_types(ml)`` — register the six dataset
+      Classification, ROC Analysis Notebook, Dataset_Split,
+      CIFAR_Source_Registration, CIFAR_Image_Upload).
+    - ``setup_dataset_types(ml)`` — register the seven dataset
       types (Complete, Training, Testing, Split, Labeled,
-      Unlabeled).
+      Unlabeled, CIFAR_Source).
     - ``apply_annotations(ml, project_name)`` — Chaise navbar
       branding.
     - ``run_schema_phase(ml, project_name)`` — orchestrator
@@ -70,6 +71,11 @@ DATASET_TYPES: list[tuple[str, str, list[str]]] = [
         "Unlabeled",
         "A dataset containing records without ground truth labels",
         ["unlabeled", "unannotated"],
+    ),
+    (
+        "CIFAR_Source",
+        "Source files a CIFAR-10 ingest registered by reference (the upload's Input provenance).",
+        [],
     ),
 ]
 
@@ -360,6 +366,31 @@ def setup_workflow_types(ml: DerivaML) -> None:
                 "Workflow that partitions an existing dataset into train/test "
                 "(and optionally validation) child datasets via "
                 "deriva_ml.dataset.split.split_dataset"
+            ),
+        )
+
+    if "CIFAR_Source_Registration" not in existing_types:
+        logger.info("Creating CIFAR_Source_Registration workflow type...")
+        ml.add_term(
+            table="Workflow_Type",
+            term_name="CIFAR_Source_Registration",
+            description=(
+                "Execution 1 of the two-execution CIFAR ingest: stage sampled "
+                "source images into a stable cache and register them as a named, "
+                "nested File dataset tree (Input provenance for Execution 2)."
+            ),
+        )
+
+    if "CIFAR_Image_Upload" not in existing_types:
+        logger.info("Creating CIFAR_Image_Upload workflow type...")
+        ml.add_term(
+            table="Workflow_Type",
+            term_name="CIFAR_Image_Upload",
+            description=(
+                "Execution 2 of the two-execution CIFAR ingest: consume the "
+                "registered File dataset as Input, resolve each tag-URL to its "
+                "local cache path, upload bytes as Image assets, and add "
+                "Image_Classification feature rows."
             ),
         )
 

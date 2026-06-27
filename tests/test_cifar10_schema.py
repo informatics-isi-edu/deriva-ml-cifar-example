@@ -32,6 +32,18 @@ def test_module_exposes_expected_api():
         assert callable(fn)
 
 
+def test_cifar_source_dataset_type_is_declared():
+    """Verify CIFAR_Source dataset type is declared in the module.
+
+    The module exposes CIFAR_Source in its DATASET_TYPES list, which
+    the setup_dataset_types function will seed into the catalog.
+    """
+    import scripts._cifar10_schema as schema
+
+    src = open(schema.__file__).read()
+    assert "CIFAR_Source" in src
+
+
 def test_lookup_alias_target_returns_none_on_failure():
     """Resolution failures must downgrade to None, not raise.
 
@@ -53,3 +65,12 @@ def test_lookup_alias_target_returns_none_on_failure():
         )
         is None
     )
+
+
+def test_phase_choices_include_register_upload_cleanup():
+    """New --phase choices register/upload/cleanup must be wired in the CLI."""
+    import scripts.load_cifar10 as l
+
+    src = open(l.__file__).read()
+    for p in ("register", "upload", "cleanup"):
+        assert p in src, f"phase {p!r} not found in load_cifar10.py"

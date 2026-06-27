@@ -145,6 +145,34 @@ uv run python src/scripts/load_cifar10.py \
     --hostname <hostname> --catalog-id <id> --num-images 10000
 ```
 
+The loader runs in phases and can be controlled with
+`--phase {all,schema,register,upload,datasets,cleanup}` (default `all`).
+You can run phases individually to resume after a partial failure or to
+inspect intermediate results:
+
+- **`register`** — Execution 1: samples source PNGs into a stable local cache
+  and registers them as a by-reference File dataset named `cifar10_source`
+  (no bytes uploaded to the catalog, only URL + MD5 + length).
+- **`upload`** — Execution 2: consumes the `cifar10_source` File dataset as an
+  Input and uploads each image as an `Image` asset + `Image_Classification`
+  feature. Because the same execution holds the source dataset as Input and the
+  `Image` assets as Output, source→image provenance is recorded and traversable.
+- **`datasets`** — builds the training dataset hierarchy (Complete, Split,
+  Training, Testing, Small variants, Labeled splits, etc.).
+- **`cleanup`** — removes the local source cache. Pass `--keep-source-cache` to
+  skip this step and avoid re-downloading/re-decoding on a subsequent run.
+
+```bash
+# Run a single phase (e.g. after a partial failure)
+uv run python src/scripts/load_cifar10.py \
+    --hostname <hostname> --catalog-id <id> --phase register
+
+# Keep the local source cache after a full run
+uv run python src/scripts/load_cifar10.py \
+    --hostname <hostname> --create-catalog cifar10_test --num-images 10000 \
+    --keep-source-cache
+```
+
 The loader prints the catalog ID and the RID of every dataset it creates
 (`Complete`, `Training`, `Small_Labeled_Split`, etc.). **Save these RIDs** —
 you need them for the next step.

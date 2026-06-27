@@ -47,7 +47,7 @@ Public API:
     - ``create_dataset_hierarchy(ml, batch_size=500)`` — does
       all the work in one Execution.
     - ``run_datasets_phase(ml, batch_size=500)`` — orchestrator
-      alias for symmetry with run_schema_phase / run_assets_phase.
+      alias for symmetry with run_schema_phase / run_register_phase / run_upload_phase.
 """
 
 from __future__ import annotations
@@ -122,7 +122,7 @@ def _require_small_variant_distinct(train_pool: int, test_pool: int) -> None:
         return
 
     # --num-images is split evenly between train and test partitions in
-    # _cifar10_assets.upload_images(), so the threshold to recover a
+    # _cifar10_register.stage_source(), so the threshold to recover a
     # non-degenerate small family is roughly 2*(SMALL_*_SIZE + 1).
     min_num_images = 2 * (max(SMALL_TRAIN_SIZE, SMALL_TEST_SIZE) + 1)
     raise SmallVariantDegenerateError(

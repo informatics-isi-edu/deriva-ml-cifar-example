@@ -89,8 +89,12 @@ def test_bag_role_is_case_insensitive():
 
 def test_training_and_validation_bags_both_engage():
     """Training + Validation bag yields train_loader + val_loader, no test_loader."""
-    train = _FakeBag(dataset_rid="T", dataset_types=["Training", "Labeled"], n_samples=8)
-    val = _FakeBag(dataset_rid="DAP", dataset_types=["Validation", "Labeled"], n_samples=4)
+    train = _FakeBag(
+        dataset_rid="T", dataset_types=["Training", "Labeled"], n_samples=8
+    )
+    val = _FakeBag(
+        dataset_rid="DAP", dataset_types=["Validation", "Labeled"], n_samples=4
+    )
     execution = _FakeExecution(datasets=[train, val])
 
     train_loader, test_loader, val_loader, class_names = build_loaders(

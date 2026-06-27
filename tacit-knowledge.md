@@ -489,3 +489,271 @@ execution-mediated and must be traversed by hand. If automatic dataset→source
 lineage is a requirement, it would need an explicit `Dataset_Dataset` edge from
 the image Complete dataset to the source File root, which `add_files` does not
 create (see [tk-005](#tk-005)).
+
+<a id="tk-012"></a>
+### tk-012 — Operational hazard — the `../deriva-ml` repo is a shared multi-agent working tree; never blind `git stash pop` there
+**When:** 2026-06-26T00:00:00-07:00
+**By:** Carl Kesselman (carl@isi.edu)
+
+While preparing to merge + release a `deriva-ml` change, a `git stash pop` in
+`../deriva-ml` accidentally applied **another agent's stash** (`stash@{0}`,
+labeled *"current-mods on other agent's branch — need to move to my branch"*),
+spilling unrelated denormalize/local_db work into the tree as `UU`/`DU`
+conflicts. The `deriva-ml` repo carries **~10 stashes from multiple
+agents/branches** (audit-thread, denormalize-user-guide, describe-warnings, …)
+— it is a busy shared working tree, not a private one.
+
+Recovery was non-destructive only because **`git stash pop` that hits conflicts
+does NOT drop the stash** — `stash@{0}` stayed intact, so the other agent's work
+was never at risk. The conflict-spilled tree copy was redundant; restoring the
+unmerged paths to `HEAD` (`git checkout -f HEAD -- <file>` for `UU`; `git rm` for
+the `DU` file absent in HEAD) cleaned the tree while leaving the stash for its
+owner to pop onto their own branch.
+
+Implications for collaborators: in `../deriva-ml` (and likely the other
+shared workspace repos), do **not** run bare `git stash`/`git stash pop` — a pop
+grabs whatever is at `stash@{0}`, which is probably someone else's. Inspect
+`git stash list` first and pop by explicit ref only for a stash you created and
+recognize. When you need a scratch stash, prefer `git stash push -m "<your
+unique label>" -- <specific paths>` and pop that exact entry by message/index.
+Our own committed work is never affected by this (commits are branch-scoped);
+the hazard is purely the shared *stash stack* and working tree.
+
+<a id="tk-013"></a>
+### tk-013 — Staging bug — `create_filespecs(cache_root)` registered all 60K extracted files because `_extract/` lived inside `cache_root`
+**When:** 2026-06-26T18:30:00-07:00
+**By:** Carl Kesselman (carl@isi.edu)
+**Supported by:** [tk-011](#tk-011) (the lineage gap this two-execution redesign fixes)
+
+First live run of the two-execution loader (`register` phase) hung for 25+
+minutes at ~18% CPU with **zero `File` rows** committed. A process stack sample
+showed it pinned in `_pydantic_core` validation (not network I/O). Root cause:
+the register scaffold's `stage_source` extracted the full CIFAR archive into
+`cache_root/_extract/` (≈60,000 PNGs) and symlinked the 2,000 sampled files into
+`cache_root/train` + `cache_root/test` — keeping `_extract/` *inside* `cache_root`
+so symlink targets stay alive. But `run_register_phase` then calls
+`FileSpec.create_filespecs(cache_root)`, which `rglob("*")`s the **entire**
+`cache_root` — so `add_files` tried to register all **60,001** files (MD5 +
+pydantic-validate each), ~30× the intended 2,000, hence the multi-minute
+pydantic hot loop.
+
+The trap: `create_filespecs(dir)` walks the whole subtree recursively with no
+exclusion. Putting the bulk extraction *under* the directory you hand to
+`create_filespecs` silently balloons the registration to the full corpus. Unit
+tests missed it because they monkeypatched `extract` to write a handful of files
+— the 60K archive only appears in a real run.
+
+Fix (applied): extract to a temp dir **outside** `cache_root`; **copy** (not
+symlink) the sampled files into `cache_root/train` + `cache_root/test`; remove
+the temp extraction. `cache_root` then holds *only* the sampled subset +
+`labels.csv`, so `create_filespecs(cache_root)` registers exactly the sampled
+files while still giving `add_files` the single nested root. The byte copy is
+~2,000 tiny PNGs (~6 MB) — negligible; the "no byte copy / symlink" optimization
+only mattered for the full 60K corpus, not a sample.
+
+Implications for collaborators: whatever directory you pass to
+`create_filespecs`/`add_files` must contain **only** the files you intend to
+register — no scratch/extraction subdirs. Stage the exact set into a clean
+directory; don't co-locate bulk working files with the registration root.
+
+<a id="tk-014"></a>
+### tk-014 — `add_files`-registered File rows have `Filename = NULL`; read the name from the `URL` tag path, not `Filename`
+**When:** 2026-06-26T19:00:00-07:00
+**By:** Carl Kesselman (carl@isi.edu)
+**Supported by:** [tk-013](#tk-013) (same two-execution upload phase)
+
+The upload execution (Exec 2) crashed reading back the registered source File
+dataset: `AttributeError: 'NoneType' object has no attribute 'endswith'` while
+matching the `labels.csv` File by `r.get("Filename", "").endswith("labels.csv")`.
+Inspecting the catalog: the File row's **`Filename` column is `None`**, even
+though its `URL` is `tag://host,date:file:///.../labels.csv`. So
+`add_files` / `FileSpec.create_filespecs` populate the **`URL`** (the tag path)
+but leave **`Filename` NULL** — the by-reference File table does not derive a
+`Filename` from the path. (The `.get("Filename", "")` default is no help: the
+key exists with value `None`, so the default never applies and `None.endswith`
+raises.)
+
+Two consequences the upload code got wrong:
+- Matching the manifest File by `Filename` fails — must match on the **basename
+  of the `URL`** instead (`Path(urlsplit(url).path).name`, or
+  `tag_url_to_path(url).name`).
+- Per-image stem/class lookup likewise can't use `Filename` — derive the stem
+  from the `URL` path too.
+
+Implications for collaborators: when consuming `add_files`-registered File rows,
+treat **`URL` as the source of truth for identity/name**; do NOT rely on
+`Filename` (it is NULL for by-reference files). Guard any `.endswith`/string op
+with `(rec.get("Filename") or "")` if you must touch it, but prefer deriving the
+name from `URL`.
+
+<a id="tk-015"></a>
+### tk-015 — Consuming a by-reference File dataset as an execution Input must use `DatasetSpec(materialize=False)` — bag materialization can't fetch `tag://` local URLs
+**When:** 2026-06-26T19:30:00-07:00
+**By:** Carl Kesselman (carl@isi.edu)
+**Supported by:** [tk-011](#tk-011) (the lineage fix that requires consuming the File dataset as Input), [tk-014](#tk-014) (same upload phase)
+
+The two-execution upload phase consumes the source File dataset as an Input so
+that lineage connects (image dataset → upload exec → source files). But
+`create_execution` **materializes every input dataset as a BDBag by default**,
+and bag materialization *validates by fetching each member's bytes from its URL*.
+Our File rows carry `tag://host,date:file:///…/cache/…/*.png` URLs (local,
+by-reference — see [tk-005](#tk-005)). The bag fetcher can't retrieve `tag://`
+local files: it looks in the bag-cache dir, finds nothing, and
+`bdbag` raises `BagValidationError: Bag validation failed` on all ~2,000 members.
+So the very mechanism that makes lineage connect (consume-as-Input) also triggers
+a byte-fetch the by-reference design can't satisfy.
+
+Fix: pass **`DatasetSpec(rid=…, version=…, materialize=False)`** for the consumed
+File dataset. `materialize=False` downloads only the **table metadata** (the File
+rows + their URLs) — no asset byte-fetch, no bag validation. That is exactly what
+the upload phase needs: it reads the File records' URLs, resolves the `tag://`
+paths to the local cache itself, and uploads from there. The Input edge (and thus
+the lineage) is still recorded; only the (impossible) byte-fetch is skipped.
+
+Implications for collaborators: any execution that consumes a **by-reference**
+File dataset (one registered via `add_files` with local `tag://` URLs) as an
+input MUST set `materialize=False` on its `DatasetSpec`. The default `True` will
+fail bag validation. This is a general constraint on by-reference datasets, not
+CIFAR-specific. (Hatrac-backed asset datasets materialize fine; the limitation is
+specific to local/`tag://`-referenced files.)
+
+<a id="tk-016"></a>
+### tk-016 — `add_files` of ~2000 files legitimately takes a few minutes (pydantic-heavy `resolve_rids` response parsing) — not a hang; and `deriva-ml:File` aggregate count needs auth
+**When:** 2026-06-26T20:00:00-07:00
+**By:** Carl Kesselman (carl@isi.edu)
+**Supported by:** [tk-008](#tk-008) (the resolve_rids chunking this entry characterizes the cost of)
+
+Two diagnostic traps that caused a false "register phase is hung" alarm:
+
+1. **`add_files` of ~2000 files spends minutes in `_pydantic_core` by design.** A
+   process stack sample shows it pinned in recursive pydantic validation with
+   `_buffered_readline` at the base — that is ERMrest **response parsing**: the
+   chunked `resolve_rids` (500 RIDs/query, [tk-008](#tk-008)) returns rows that are
+   validated into models one by one. Isolating just `FileSpec.create_filespecs`
+   over the same 2000-file tree took **0.4 s** — so the time is in the catalog
+   insert / resolution, not spec building. Prior *successful* 2000-file loads
+   (catalogs 133/259/263) took several minutes too. Do **not** kill an `add_files`
+   register phase at 1–2 minutes assuming a hang; give a 2000-file registration
+   ~3–5 minutes, and confirm "stuck" only via *no forward progress* over a longer
+   window, not by a single stack sample showing pydantic.
+
+2. **`/ermrest/catalog/N/aggregate/deriva-ml:File/cnt:=cnt(RID)` returns
+   `[{"cnt":0}]` without auth** even when File rows exist. It is not a reliable
+   "did register run" signal. Verify File rows via `ml.lookup_dataset(<File
+   dataset rid>).list_dataset_members()` (which uses the authenticated session)
+   instead — e.g. catalog 263's File datasets show 1000 members each while the
+   unauthenticated aggregate reported 0.
+
+Implications for collaborators: time-box register-phase patience to minutes, not
+seconds; distinguish "slow but progressing" from "hung" with a *second* sample
+minutes apart, not one; and never use the unauthenticated aggregate endpoint as a
+row-count oracle.
+
+<a id="tk-017"></a>
+### tk-017 — Two-execution ingest verified: source→image provenance now connects at the execution/asset level; `lookup_lineage` on an image *dataset* still needs a manual hop
+**When:** 2026-06-26T20:30:00-07:00
+**By:** Carl Kesselman (carl@isi.edu)
+**Supported by:** [tk-011](#tk-011) (the lineage gap this set out to fix), [tk-015](#tk-015) (the materialize=False that made consume-as-Input work)
+
+Full two-execution load completed end-to-end (register → upload → datasets;
+2000 images + 2000 features + the 12-dataset hierarchy + the nested source File
+tree). Verified the provenance outcome directly from `Dataset_Execution` and the
+`Image` asset rows:
+
+- The **upload execution** consumed the source File dataset as an **Input**
+  (`Dataset_Execution`: source-root File dataset → upload exec) **and** produced
+  the `Image` assets as Outputs (every `Image.execution_rid` == that same upload
+  exec). So the chain **source File dataset –Input→ upload exec –Output→ Image
+  assets** is now a recorded, traversable edge — which did NOT exist before
+  ([tk-011](#tk-011)). That is the substantive fix and it works.
+
+What is still *not* a single-hop query: `ml.lookup_lineage(<image dataset, e.g.
+Small_Testing>)` does **not** list the source File dataset in `consumed_datasets`.
+Reason: the image dataset hierarchy (Complete → Split → subsample) is built by a
+**separate datasets-phase execution** that consumes image *datasets*, not the
+upload execution; `lookup_lineage` on a dataset walks the dataset/execution
+graph, and the upload execution produced *assets*, not datasets. To get from an
+image dataset to its source you hop: image dataset → its `Image` members →
+`Image.execution_rid` (the upload exec) → that exec's Input File dataset.
+
+Implications for collaborators: the design goal — "the source files are recorded
+provenance of the images" — is achieved (execution-mediated, at the asset level,
+queryable). But do not expect `lookup_lineage` on a *training dataset* to render
+the source in one call; the source connects through the **Image-producing
+execution**, not through a dataset-to-dataset edge. If single-hop dataset→source
+lineage is ever required, the datasets-phase execution would need to also consume
+the source File dataset as an Input (or an explicit `Dataset_Dataset` edge from
+`Complete` to the source root).
+
+<a id="tk-018"></a>
+### tk-018 — Improvement flagged for deriva-ml: `lookup_lineage` should traverse a dataset's member assets to their producing execution (the data is there; the walk stops at datasets)
+**When:** 2026-06-26T20:45:00-07:00
+**By:** Carl Kesselman (carl@isi.edu)
+**Supported by:** [tk-017](#tk-017) (the manual-hop gap this would close)
+
+Decided that the single-hop gap from [tk-017](#tk-017) is best fixed **upstream
+in deriva-ml's `lookup_lineage`**, not worked around in the CIFAR loader. The
+reasoning: every provenance edge already exists in the catalog (image dataset →
+its `Image` members; `Image` members → producing execution; that execution → its
+Input source File dataset). The limitation is purely in the **traversal** —
+`lookup_lineage` (`core/mixins/execution.py`, `_walk_node`) walks dataset →
+producing/consuming executions → those executions' consumed *datasets/assets*,
+but when it reaches a dataset it does **not** descend into that dataset's
+*member assets* and walk *their* producing execution's inputs. So asset-level
+provenance is invisible to a dataset-rooted lineage query.
+
+The primitive already exists: `find_executions_consuming` (same file) already
+handles asset RIDs (`if is_asset(table): return list_asset_executions(...)`), and
+`list_dataset_members` yields a dataset's member assets. So the improvement is to
+have the walk, on reaching a dataset, also expand `member assets → their
+producing execution → that execution's inputs` and fold those into the lineage
+tree. That is a **general** fix — it helps any dataset whose members were
+execution-produced (predictions, derived assets, ingested images), not just CIFAR.
+
+Status: flagged as a separate deriva-ml work item (its own design/plan), NOT
+done. It is independent of the two-execution ingest plan. Until it lands, use the
+manual hop from [tk-017](#tk-017) to get from an image dataset to its source.
+
+<a id="tk-019"></a>
+### tk-019 — `--phase upload` run standalone was broken: `_find_latest_source_dataset_rid` called `find_datasets(dataset_types=…)`, a kwarg that doesn't exist
+**When:** 2026-06-26T21:30:00-07:00
+**By:** Carl Kesselman (carl@isi.edu)
+**Supported by:** [tk-017](#tk-017) (the connected-lineage test that exposed this)
+
+The two-execution loader threads the source File-dataset RID from the register
+phase straight into the upload phase when run as `--phase all`. But when the
+upload phase is run **standalone** (`--phase upload`, no preceding register call
+in the same process), `load_cifar10.py` has to *discover* the source dataset in
+the catalog via `_find_latest_source_dataset_rid(ml)`. That helper called
+`ml.find_datasets(dataset_types=["CIFAR_Source"])`, but `find_datasets`'
+signature is `find_datasets(deleted=False, sort=None)` — there is **no
+`dataset_types` parameter**. So standalone `--phase upload` raised
+`TypeError: find_datasets() got an unexpected keyword argument 'dataset_types'`
+and had, in fact, **never worked**.
+
+It went unnoticed because every prior live verification used `--phase all` (which
+never calls the discovery helper — the RID is threaded in directly). The defect
+only surfaced when the new connected-lineage regression test
+(`tests/test_lineage_connected.py`) split the load into separate `register` then
+`upload` phases (to skip the unneeded `datasets` phase and run faster) — which is
+exactly the standalone path. The test failing IS the regression net working.
+
+Fix: filter in Python instead. `find_datasets()` returns `Dataset` objects that
+expose `.dataset_types` (list of type-term names), `.source_directory` (`"."`
+for the root of an `add_files` tree), `.is_directory`, and `.dataset_rid`. The
+root source dataset is the one with `"CIFAR_Source" in d.dataset_types` **and**
+`d.source_directory == "."` (the `"."` is what disambiguates the root from its
+`train`/`test` children).
+
+Lesson: a code path reachable only by a CLI flag combination that no test or
+routine run exercises is effectively untested — `--phase all` passing told us
+nothing about `--phase upload` alone. The `find_datasets(dataset_types=…)` trap
+bit three times in one session (loader helper, plus the Task 8 implementer and
+reviewer who each independently assumed the same missing kwarg): `find_datasets`
+filters by neither type nor directory — you filter the returned objects yourself.
+
+**Weighed alternatives:** (1) add an explicit Input/`Dataset_Dataset` edge in the
+CIFAR loader so the existing walk finds it — rejected as a CIFAR-specific patch
+that papers over a general traversal gap. (2) accept the manual hop — rejected;
+the gap is worth fixing once, upstream. (3) improve `lookup_lineage` to traverse
+member assets — chosen.

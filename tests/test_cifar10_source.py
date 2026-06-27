@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import pickle
-import tarfile
 from unittest.mock import patch
 
 import numpy as np
 
 from scripts._cifar10_source import (
     download_cifar10_archive,
-    extract_cifar10_to_png,
     load_batch,
 )
 
@@ -84,71 +82,40 @@ def test_load_batch_preserves_channel_order(tmp_path):
     assert images[0, 31, 31, 2] == 30  # last pixel: still B=30
 
 
-def test_extract_writes_pngs_and_returns_labels(tmp_path):
-    # Build a minimal tarball that mimics cifar-10-python.tar.gz.
-    archive = tmp_path / "cifar-10-python.tar.gz"
-    work = tmp_path / "build"
-    cifar_dir = work / "cifar-10-batches-py"
-    cifar_dir.mkdir(parents=True)
+def test_write_labels_manifest_round_trips(tmp_path):
+    from scripts._cifar10_source import write_labels_manifest
 
-    for idx, name in enumerate(["data_batch_1", "data_batch_2", "test_batch"]):
-        with (cifar_dir / name).open("wb") as fh:
-            pickle.dump(_fake_batch(num_images=2, label_offset=idx * 2), fh)
+    labels = {"frog_42": "frog", "cat_7": "cat"}
+    path = write_labels_manifest(tmp_path, labels)
+    assert path == tmp_path / "labels.csv"
+    rows = path.read_text().strip().splitlines()
+    assert rows[0] == "filename,class"
+    assert "frog_42.png,frog" in rows
+    assert "cat_7.png,cat" in rows
 
-    # meta file with class names (decoded against b"label_names").
-    meta = {
-        b"label_names": [
-            b"airplane",
-            b"automobile",
-            b"bird",
-            b"cat",
-            b"deer",
-            b"dog",
-            b"frog",
-            b"horse",
-            b"ship",
-            b"truck",
-        ],
-    }
-    with (cifar_dir / "batches.meta").open("wb") as fh:
-        pickle.dump(meta, fh)
 
-    with tarfile.open(archive, "w:gz") as tar:
-        tar.add(cifar_dir, arcname="cifar-10-batches-py")
+def test_stratified_pick_is_class_balanced_and_deterministic():
+    """_stratified_pick keeps `limit` items spread evenly across classes,
+    reproducibly, and keeps everything when limit is None/over-large."""
+    from scripts._cifar10_source import _stratified_pick
+    from collections import Counter
 
-    out = tmp_path / "out"
-    train_dir, test_dir, labels = extract_cifar10_to_png(archive, out)
+    items = [(None, c, f"{c}_{i}") for c in ("a", "b", "c") for i in range(10)]
 
-    assert train_dir == out / "train"
-    assert test_dir == out / "test"
-    train_pngs = sorted(train_dir.glob("*.png"))
-    test_pngs = sorted(test_dir.glob("*.png"))
-    assert len(train_pngs) == 4  # 2 batches × 2 images
-    assert len(test_pngs) == 2
+    pick = _stratified_pick(items, limit=9, seed=1)
+    assert len(pick) == 9
+    assert dict(Counter(c for _, c, _ in pick)) == {"a": 3, "b": 3, "c": 3}
 
-    # Every PNG has a labels entry, and labels are class names (not ints).
-    valid_classes = {
-        "airplane",
-        "automobile",
-        "bird",
-        "cat",
-        "deer",
-        "dog",
-        "frog",
-        "horse",
-        "ship",
-        "truck",
-    }
-    for png in train_pngs + test_pngs:
-        assert png.stem in labels
-        assert labels[png.stem] in valid_classes
+    # deterministic for a fixed seed
+    pick2 = _stratified_pick(items, limit=9, seed=1)
+    assert [f for _, _, f in pick] == [f for _, _, f in pick2]
 
-    # Pin specific label assignments (catches class-index off-by-one bugs).
-    # _fake_batch assigns labels [i + label_offset] % 10 for i in range(num_images),
-    # and our build loop passes label_offset = idx * 2:
-    #   batch 1 (idx=0, num=2) → labels [0, 1] → classes [airplane, automobile]
-    #   batch 2 (idx=1, num=2) → labels [2, 3] → classes [bird, cat]
-    #   test_batch (idx=2, num=2) → labels [4, 5] → classes [deer, dog]
-    assert labels["img_0"] == "airplane"
-    assert labels["img_2"] == "bird"
-    assert labels["img_4"] == "deer"
+    # None / over-large limit keeps everything
+    assert len(_stratified_pick(items, None, 1)) == 30
+    assert len(_stratified_pick(items, 100, 1)) == 30
+
+    # uneven remainder distributed deterministically (10 across 3 classes)
+    pick3 = _stratified_pick(items, limit=10, seed=1)
+    assert len(pick3) == 10
+    dist = Counter(c for _, c, _ in pick3)
+    assert sorted(dist.values()) == [3, 3, 4]
