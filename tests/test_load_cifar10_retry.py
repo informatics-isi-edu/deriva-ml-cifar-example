@@ -35,7 +35,7 @@ LIVE_GATE = pytest.mark.skipif(
 
 def test_truncate_helper_is_exposed_for_callers():
     """The retry-idempotence helper must be importable by tests + tooling."""
-    from scripts._cifar10_assets import _truncate_loader_classification_rows
+    from scripts._cifar10_upload import _truncate_loader_classification_rows
 
     assert callable(_truncate_loader_classification_rows)
 
@@ -94,8 +94,9 @@ def test_phase_images_retry_does_not_accumulate_rows():
     Gated by ``DERIVA_ML_LIVE_LOCALHOST=1`` because it needs a
     running localhost Deriva server. See module docstring.
     """
-    from scripts._cifar10_assets import run_assets_phase
+    from scripts._cifar10_register import run_register_phase
     from scripts._cifar10_schema import create_or_connect_catalog, run_schema_phase
+    from scripts._cifar10_upload import run_upload_phase
 
     suffix = uuid.uuid4().hex[:8]
     alias = f"loader-retry-test-{suffix}"
@@ -111,21 +112,23 @@ def test_phase_images_retry_does_not_accumulate_rows():
     try:
         run_schema_phase(ml, alias)
 
-        # First pass: 200 images.
-        first = run_assets_phase(ml, max_images=200)
+        # First pass: 200 images (register → upload).
+        source_rid_1 = run_register_phase(ml, max_images=200)
+        first = run_upload_phase(ml, source_dataset_rid=source_rid_1)
         assert first["features_added"] == 200
         assert _count_loader_rows(ml) == 200
         assert _count_unique_loader_images(ml) == 200
 
         # Second pass: 400 images (the retry).
-        second = run_assets_phase(ml, max_images=400)
+        source_rid_2 = run_register_phase(ml, max_images=400)
+        second = run_upload_phase(ml, source_dataset_rid=source_rid_2)
         assert second["features_added"] == 400
         # The fix's signature: prior loader rows were truncated.
         assert second["prior_rows_truncated"] == 200
 
         # The regression check: no accumulation across retries.
         assert _count_loader_rows(ml) == 400, (
-            "loader-retry accumulation bug: prior --phase images rows "
+            "loader-retry accumulation bug: prior --phase upload rows "
             "were not truncated before the retry. See "
             "findings/evaluator/01-loader-retry-leaves-orphaned-gt-feature-rows.md."
         )

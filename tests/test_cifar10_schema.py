@@ -65,3 +65,12 @@ def test_lookup_alias_target_returns_none_on_failure():
         )
         is None
     )
+
+
+def test_phase_choices_include_register_upload_cleanup():
+    """New --phase choices register/upload/cleanup must be wired in the CLI."""
+    import scripts.load_cifar10 as l
+
+    src = open(l.__file__).read()
+    for p in ("register", "upload", "cleanup"):
+        assert p in src, f"phase {p!r} not found in load_cifar10.py"

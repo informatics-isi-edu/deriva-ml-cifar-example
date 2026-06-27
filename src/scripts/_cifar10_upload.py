@@ -27,6 +27,10 @@ Public API:
       reader that turns a ``labels.csv`` (written by
       :func:`scripts._cifar10_source.write_labels_manifest`) into a
       ``{filename: class}`` dict keyed by ``<stem>.png``.
+    - ``add_classification_features(ml) -> dict`` — Execution 2b: add
+      ``Image_Classification`` feature rows for every uploaded image.
+    - ``_truncate_loader_classification_rows(ml) -> int`` — helper used
+      by ``add_classification_features`` to make retries idempotent.
     - ``run_upload_phase(ml, source_dataset_rid) -> dict`` — Execution 2
       orchestrator: consume the File dataset, upload Image assets, add
       ``Image_Classification`` features, return stats.
@@ -43,6 +47,8 @@ from typing import Any
 from deriva_ml import DerivaML
 from deriva_ml.dataset.aux_classes import DatasetSpec
 from deriva_ml.execution import ExecutionConfiguration
+
+from scripts._cifar10_register import class_from_filename
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +106,129 @@ def read_labels_manifest(path: Path) -> dict[str, str]:
     with path.open(newline="") as fh:
         reader = csv.DictReader(fh)
         return {row["filename"]: row["class"] for row in reader}
+
+
+# ---------------------------------------------------------------------------
+# Feature-labeling helpers (Execution 2b)
+# ---------------------------------------------------------------------------
+
+
+def _truncate_loader_classification_rows(ml: DerivaML) -> int:
+    """Delete any prior loader-written ``Image_Classification`` rows.
+
+    Makes the labeling sub-stage idempotent on retry.  When a previous
+    loader attempt's labeling sub-stage succeeded but the run failed
+    later and the user re-ran the loader, prior ground-truth feature rows
+    would otherwise accumulate.  The truncate is filtered to
+    ``Confidence IS NULL`` so it touches only loader-written ground-truth
+    rows; training executions' prediction rows (``Confidence`` populated)
+    are preserved.
+
+    Args:
+        ml: Connected DerivaML instance.
+
+    Returns:
+        The number of prior loader rows that were deleted (zero on a
+        fresh catalog).
+
+    Example:
+        >>> deleted = _truncate_loader_classification_rows(ml)  # doctest: +SKIP
+        >>> print(f"removed {deleted} stale GT rows")
+    """
+    feat = ml.lookup_feature("Image", "Image_Classification")
+    pb = ml.pathBuilder()
+    feature_path = pb.schemas[feat.feature_table.schema.name].tables[
+        feat.feature_table.name
+    ]
+    # Confidence IS NULL selects loader rows (ground truth) and
+    # excludes training rows (predictions). The `== None` form is the
+    # ermrest path-builder spelling for IS NULL.
+    prior = list(
+        feature_path.filter(feature_path.Confidence == None)  # noqa: E711
+        .entities()
+        .fetch()
+    )
+    if not prior:
+        return 0
+    logger.info(
+        f"  Truncating {len(prior)} prior loader Image_Classification rows "
+        "(retry idempotence; preserves training-prediction rows)"
+    )
+    feature_path.filter(feature_path.Confidence == None).delete()  # noqa: E711
+    return len(prior)
+
+
+def add_classification_features(ml: DerivaML) -> dict[str, Any]:
+    """Execution 2b — add Image_Classification feature for every uploaded image.
+
+    Queries the catalog for all ``Image`` asset rows, decodes the class
+    from each filename via :func:`scripts._cifar10_register.class_from_filename`,
+    and adds an ``Image_Classification`` feature row inside one Execution.
+    Images whose filenames don't decode are logged and skipped.
+
+    This sub-stage is fully self-contained — it reads back from the catalog
+    rather than depending on any in-memory state from Execution 2a.  Any
+    prior loader-written ``Image_Classification`` rows are truncated first
+    via :func:`_truncate_loader_classification_rows`, so retries don't
+    accumulate orphaned ground-truth rows.  Training executions' prediction
+    rows (``Confidence`` populated) are preserved.
+
+    Args:
+        ml: Connected DerivaML instance.
+
+    Returns:
+        Stats dict with keys ``features_added``, ``images_skipped``,
+        ``execution_rid``, ``prior_rows_truncated``.
+
+    Example:
+        >>> stats = add_classification_features(ml)  # doctest: +SKIP
+        >>> stats["features_added"]  # doctest: +SKIP
+        100
+    """
+    assets = ml.list_assets("Image")
+    logger.info(f"Found {len(assets)} Image assets in catalog")
+
+    prior_truncated = _truncate_loader_classification_rows(ml)
+
+    workflow = ml.create_workflow(
+        name="CIFAR-10 Classification Labeling",
+        workflow_type="CIFAR_Data_Load",
+        description="Add Image_Classification feature for each Image asset",
+    )
+    config = ExecutionConfiguration(workflow=workflow)
+
+    ImageClassification = ml.feature_record_class("Image", "Image_Classification")
+
+    feature_records = []
+    skipped = 0
+    for asset in assets:
+        class_name = class_from_filename(asset.filename)
+        if class_name is None:
+            logger.warning(f"Skipping {asset.filename}: cannot decode class")
+            skipped += 1
+            continue
+        feature_records.append(
+            ImageClassification(
+                Image=asset.asset_rid,
+                Image_Class=class_name,
+            )
+        )
+
+    with ml.create_execution(config) as exe:
+        logger.info(f"  Labeling execution RID: {exe.execution_rid}")
+        execution_rid = exe.execution_rid
+        logger.info(f"  Adding {len(feature_records)} classification labels...")
+        exe.add_features(feature_records)
+
+    exe.commit_output_assets(clean_folder=True)
+    logger.info(f"  Added {len(feature_records)} Image_Classification features")
+
+    return {
+        "features_added": len(feature_records),
+        "images_skipped": skipped,
+        "execution_rid": execution_rid,
+        "prior_rows_truncated": prior_truncated,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -270,8 +399,6 @@ def run_upload_phase(
     # ------------------------------------------------------------------
     # Execution 2b: add Image_Classification feature rows
     # ------------------------------------------------------------------
-    from scripts._cifar10_assets import add_classification_features  # DOMAIN: see below
-
     # ``add_classification_features`` reads back all Image rows from the
     # catalog and derives the class from the uploaded filename
     # (``train_<class>_<stem>.png`` convention) — no in-memory state

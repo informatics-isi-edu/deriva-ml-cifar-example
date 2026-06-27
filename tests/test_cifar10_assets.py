@@ -1,9 +1,15 @@
-"""Smoke tests for src/scripts/_cifar10_assets.py.
+"""Smoke tests for the helpers that were formerly in ``_cifar10_assets.py``.
 
 Stage 2 needs a live Deriva catalog for its actual work, so
 the module-structure tests are sparse — end-to-end behavior is
-exercised in the load-cifar10 smoke test in Task A13. The
+exercised in the load-cifar10 smoke test in Task A13.  The
 stratified-sampling helper is pure and is tested directly here.
+
+Following the Task 7 retirement of ``_cifar10_assets.py``:
+  - ``class_from_filename`` / ``stratified_sample_by_class`` /
+    ``DEFAULT_SAMPLE_SEED`` live in ``_cifar10_register``.
+  - ``add_classification_features`` / ``_truncate_loader_classification_rows``
+    live in ``_cifar10_upload``.
 """
 
 from __future__ import annotations
@@ -40,18 +46,18 @@ def _make_class_balanced_corpus(per_class: int) -> tuple[list[Path], dict[str, s
 
 
 def test_module_exposes_expected_api():
-    from scripts._cifar10_assets import (
-        upload_images,
-        add_classification_features,
-        run_assets_phase,
+    from scripts._cifar10_register import (
         class_from_filename,
         stratified_sample_by_class,
     )
+    from scripts._cifar10_upload import (
+        add_classification_features,
+        run_upload_phase,
+    )
 
     for fn in (
-        upload_images,
         add_classification_features,
-        run_assets_phase,
+        run_upload_phase,
         class_from_filename,
         stratified_sample_by_class,
     ):
@@ -59,19 +65,19 @@ def test_module_exposes_expected_api():
 
 
 def test_class_from_filename_decodes_train():
-    from scripts._cifar10_assets import class_from_filename
+    from scripts._cifar10_register import class_from_filename
 
     assert class_from_filename("train_frog_42.png") == "frog"
 
 
 def test_class_from_filename_decodes_test():
-    from scripts._cifar10_assets import class_from_filename
+    from scripts._cifar10_register import class_from_filename
 
     assert class_from_filename("test_cat_19.png") == "cat"
 
 
 def test_class_from_filename_returns_none_for_unknown():
-    from scripts._cifar10_assets import class_from_filename
+    from scripts._cifar10_register import class_from_filename
 
     assert class_from_filename("random_image.png") is None
     assert class_from_filename("train.png") is None
@@ -79,7 +85,7 @@ def test_class_from_filename_returns_none_for_unknown():
 
 def test_stratified_sample_balances_when_divisible_by_classes():
     """At --num-images 100 (10 per class), every class gets exactly 10."""
-    from scripts._cifar10_assets import stratified_sample_by_class
+    from scripts._cifar10_register import stratified_sample_by_class
 
     paths, labels = _make_class_balanced_corpus(per_class=500)
     sample = stratified_sample_by_class(paths, labels, sample_size=100, seed=42)
@@ -92,7 +98,7 @@ def test_stratified_sample_balances_when_divisible_by_classes():
 
 def test_stratified_sample_is_deterministic_under_seed():
     """Same seed -> same sample (set equality, since final shuffle differs)."""
-    from scripts._cifar10_assets import stratified_sample_by_class
+    from scripts._cifar10_register import stratified_sample_by_class
 
     paths, labels = _make_class_balanced_corpus(per_class=200)
     s1 = stratified_sample_by_class(paths, labels, sample_size=100, seed=42)
@@ -106,7 +112,7 @@ def test_stratified_sample_is_deterministic_under_seed():
 
 def test_stratified_sample_distributes_remainder():
     """sample_size=15 across 10 classes: 5 classes get 2, others get 1."""
-    from scripts._cifar10_assets import stratified_sample_by_class
+    from scripts._cifar10_register import stratified_sample_by_class
 
     paths, labels = _make_class_balanced_corpus(per_class=100)
     sample = stratified_sample_by_class(paths, labels, sample_size=15, seed=42)
@@ -122,11 +128,11 @@ def test_stratified_sample_distributes_remainder():
 
 def test_stratified_sample_warns_when_below_class_count(caplog):
     """sample_size=5 < 10 classes: warn and degrade to biased sample."""
-    from scripts._cifar10_assets import stratified_sample_by_class
+    from scripts._cifar10_register import stratified_sample_by_class
 
     paths, labels = _make_class_balanced_corpus(per_class=10)
-    # stratified_sample_by_class now lives in _cifar10_register; its
-    # logger is scripts._cifar10_register (moved in Task 5).
+    # stratified_sample_by_class lives in _cifar10_register; its
+    # logger is scripts._cifar10_register.
     with caplog.at_level(logging.WARNING, logger="scripts._cifar10_register"):
         sample = stratified_sample_by_class(paths, labels, sample_size=5, seed=42)
 
@@ -137,7 +143,7 @@ def test_stratified_sample_warns_when_below_class_count(caplog):
 
 def test_stratified_sample_returns_all_when_size_exceeds_corpus():
     """sample_size > len(items) returns the full known-class set."""
-    from scripts._cifar10_assets import stratified_sample_by_class
+    from scripts._cifar10_register import stratified_sample_by_class
 
     paths, labels = _make_class_balanced_corpus(per_class=3)
     sample = stratified_sample_by_class(paths, labels, sample_size=100, seed=42)
@@ -150,7 +156,7 @@ def test_stratified_sample_returns_all_when_size_exceeds_corpus():
 
 def test_stratified_sample_none_returns_full_corpus():
     """sample_size=None returns all known-class items (shuffled deterministically)."""
-    from scripts._cifar10_assets import stratified_sample_by_class
+    from scripts._cifar10_register import stratified_sample_by_class
 
     paths, labels = _make_class_balanced_corpus(per_class=4)
     sample = stratified_sample_by_class(paths, labels, sample_size=None, seed=42)
@@ -161,7 +167,7 @@ def test_stratified_sample_none_returns_full_corpus():
 
 def test_stratified_sample_skips_unlabeled_items():
     """Items whose stem is missing from ``labels`` are silently dropped."""
-    from scripts._cifar10_assets import stratified_sample_by_class
+    from scripts._cifar10_register import stratified_sample_by_class
 
     paths, labels = _make_class_balanced_corpus(per_class=10)
     extras = [Path("unknown_x.png"), Path("unknown_y.png")]
