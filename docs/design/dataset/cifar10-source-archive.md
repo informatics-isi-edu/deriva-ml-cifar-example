@@ -98,9 +98,13 @@ depends on is unchanged.
   that same upload execution). The chain **source File dataset → upload exec →
   Image assets** is a recorded, traversable edge (verified live, `tk-017`).
   Regression coverage: `tests/test_lineage_connected.py`.
-- **`lookup_lineage` on an image dataset** still requires a manual hop to reach
-  the source files: image dataset → its `Image` members → `Image.execution_rid`
-  (the upload exec) → that exec's Input source File dataset (`tk-017`/`tk-018`).
+- **`lookup_lineage` on an image dataset** reaches the source files in one call
+  as of **deriva-ml ≥ 1.52.0** (the pinned version): the walk descends into the
+  dataset's `Image` members → their producing (upload) execution → that exec's
+  Input source File dataset. Before 1.52.0 this needed a manual hop (image
+  dataset → `Image` members → `Image.execution_rid` → the exec's Input source
+  dataset). See `tk-018` (member-asset traversal) and `tk-020`/`tk-021`/`tk-022`
+  (consumed-version faithfulness, the FK-RID fix, and the perf/guard follow-up).
 - **Integrity meaning:** the MD5/length describe the exact source files that
   were sampled and uploaded this run.
 
