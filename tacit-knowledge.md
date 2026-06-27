@@ -710,9 +710,22 @@ producing execution → that execution's inputs` and fold those into the lineage
 tree. That is a **general** fix — it helps any dataset whose members were
 execution-produced (predictions, derived assets, ingested images), not just CIFAR.
 
-Status: flagged as a separate deriva-ml work item (its own design/plan), NOT
-done. It is independent of the two-execution ingest plan. Until it lands, use the
-manual hop from [tk-017](#tk-017) to get from an image dataset to its source.
+Status: **RESOLVED (2026-06-26).** Implemented in deriva-ml on branch
+`feature/lineage-member-asset-traversal` (spec + plan + 4 SDD tasks, final
+whole-branch review READY-TO-MERGE). `lookup_lineage` now descends into a
+dataset's member assets: a new private helper `_producers_of_dataset_members`
+collects the distinct executions that produced a dataset's member assets (via
+each `<Asset>_Execution` Output association, deduplicated, O(member-asset-tables)
+chunked queries — not O(members)), and those producing executions are seeded as
+ordinary lineage parents at both the root dataset (so `lookup_lineage(image_dataset)`
+reaches the source directly) and mid-walk (when a dataset is a consumed input).
+No public-model change; stays inside ADR-0001's data-flow doctrine. A live
+end-to-end test proves `lookup_lineage(image_dataset)` now surfaces the upload
+execution and the source File dataset. **The manual hop from [tk-017](#tk-017)
+is no longer required once that deriva-ml change is released and the lock is
+bumped here.** (Until the cifar-example's deriva-ml pin is advanced past the
+release carrying this change, the installed library still has the old walk — so
+verify the installed version before relying on the one-call traversal.)
 
 <a id="tk-019"></a>
 ### tk-019 — `--phase upload` run standalone was broken: `_find_latest_source_dataset_rid` called `find_datasets(dataset_types=…)`, a kwarg that doesn't exist
@@ -757,3 +770,168 @@ CIFAR loader so the existing walk finds it — rejected as a CIFAR-specific patc
 that papers over a general traversal gap. (2) accept the manual hop — rejected;
 the gap is worth fixing once, upstream. (3) improve `lookup_lineage` to traverse
 member assets — chosen.
+
+<a id="tk-020"></a>
+### tk-020 — `/codex` review of the member-asset traversal found a real mid-walk consumed-version / self-parent gap our 4-agent review missed
+**When:** 2026-06-26T22:45:00-07:00
+**By:** Carl Kesselman (carl@isi.edu)
+**Supported by:** [tk-018](#tk-018) (the traversal this hardens)
+
+An independent `/codex` (OpenAI) review of the merged `lookup_lineage`
+member-asset traversal (deriva-ml `0a83b22b`) surfaced a real correctness gap
+that our brainstorm → spec → 4-task SDD review chain did **not** catch. Worth
+recording because it shows where the new member-producer seeding is *not*
+behavior-faithful, and because the fix has non-obvious reasoning.
+
+The gap (the one that produces **wrong output**, not just loose semantics):
+
+1. **Mid-walk uses the dataset's CURRENT members, not the CONSUMED version.**
+   When an execution `E` consumed dataset `D`, `_walk_node` walks `D`'s members
+   via `_producers_of_dataset_members(ds.dataset_rid)` with **no version** —
+   `list_input_datasets()` drops the `Dataset_Execution.Dataset_Version` pin, so
+   member-producers are computed from `D`'s *latest* membership. If `D` later
+   gains assets produced by another execution, lineage reports ancestors that
+   were not actually inputs at consumption time.
+2. **No mid-walk self-parent guard → false cycle.** If `D` (current) contains
+   assets produced by the very execution `E` that consumed it, `E` lands in its
+   own `parent_rids`; the recursion hits `in_progress` and reports a **false
+   cycle / self-parent**. The ROOT path already guards this (the
+   `member_producers - {producer_rid}` subtraction from [tk-018]'s Task 3), but
+   the mid-walk path has no equivalent. That asymmetry is the bug.
+
+Severity: Codex rated both P2 (no P1; the gate passed). Important nuance —
+this is partly a **pre-existing** limitation: `lookup_lineage` already walks
+*current* dataset versions (its docstring says historical-version walking is a
+future enhancement), and our change merely extended that same current-version
+behavior to member assets. So it is not a regression from nothing — but the
+**missing mid-walk self-parent guard is genuinely ours**, and the consumed-
+version blast radius is now wider.
+
+Also flagged (lower priority, deferred): the no-version-producer
+`sorted(member_producers)[0]` "representative root" implies sibling
+dependencies that may not exist (P2, rare — datasets almost always have a
+version-producer); both asset-producer helpers hard-code `row.get("Execution")`
+instead of the FK name `find_association()` returns (P3, pre-existing in
+`_producer_of_asset`, safe for the current schema convention); `_walk_node`
+being shared means non-Dataset roots now also surface member-producers deeper
+in the tree (P3, that's the intended improvement, not a defect).
+
+**Decision:** fix the mid-walk consumed-version + self-parent gap (it's the one
+that yields *wrong* lineage). The bounded fix: thread
+`Dataset_Execution.Dataset_Version` from `list_input_datasets` through to the
+member-producer lookup, and subtract the currently-expanding execution from
+mid-walk `parent_rids` exactly as the root path already does. **RESOLVED
+(2026-06-26):** implemented in deriva-ml (merged `b0d5d6cb`, final review
+READY-TO-MERGE) — new `list_input_datasets_with_versions` helper surfaces the
+consumed version, `_producer_of_dataset` gained `version=`, `_walk_node` threads
+the consumed version into the summary + both producer lookups and subtracts
+`execution_rid` from member-producers (self-parent guard). A live
+versioned-mutation test proves it (and caught [tk-021]). Lesson: a
+same-team multi-agent review converges on the same mental model and can share
+its blind spots; a *different model* (codex) reviewing the whole call chain
+catches what an echo chamber misses. Run `/codex` on load-bearing shared-library
+changes.
+
+<a id="tk-021"></a>
+### tk-021 — `Dataset_Execution.Dataset_Version` is an FK that returns the version-row RID, not the version string — the consumed-version fix mocked the wrong value and the LIVE test caught it
+**When:** 2026-06-26T23:40:00-07:00
+**By:** Carl Kesselman (carl@isi.edu)
+**Supported by:** [tk-020](#tk-020) (the consumed-version fix this bug lives in)
+
+While implementing the consumed-version lineage fix ([tk-020]), the new helper
+`list_input_datasets_with_versions` returned `record.get("Dataset_Version")`
+straight from a `Dataset_Execution` row, assuming it was a version *string* like
+`"1.0.0"`. It is not. `Dataset_Execution.Dataset_Version` is a **foreign key** to
+the `Dataset_Version` table, so ERMrest returns the **RID** of that row (e.g.
+`"4FP"`). The codebase confirms this both ways: writes store a RID
+(`execution.py:678` and `:2064` set `Dataset_Version` to
+`_version_rid(...)` / `version_rid`), and reads compare against a RID
+(`execution.py:759`: `row.get("Dataset_Version") != pinned_version_rid`).
+
+The RID then poisoned the consumed-version path: `_producer_of_dataset(rid,
+version="4FP")` compared `"4FP"` against `Dataset_Version.Version == "1.0.0"` →
+no match → consumed-version producer **silently missed**; and
+`_producers_of_dataset_members(rid, version="4FP")` ran `DatasetVersion.parse("4FP")`
+→ **crash** (`InvalidVersion`).
+
+Why the unit tests didn't catch it: the offline tests mocked the
+`Dataset_Execution` fetch as `{"Dataset_Version": "1.0.0", ...}` — a
+plausible-looking but **wrong** stand-in for what ERMrest actually returns (a
+RID). Every offline test passed; the **live** test
+(`test_lookup_lineage_reflects_consumed_version_not_latest`) failed with
+`InvalidVersion: Invalid version: '4FP'` — the third time in this work a live
+test caught a real bug the mocks hid (cf. the standalone-upload bug [tk-019],
+the member-asset live test).
+
+Fix: in `list_input_datasets_with_versions`, resolve each
+`Dataset_Version` RID to its `Version` **string** before returning (fetch the
+`Dataset_Version` table once, build a `{RID: Version}` map; precedent at
+`execution.py:766-770`). Return the version string so the downstream
+version-aware lookups match correctly.
+
+Lesson: when a helper reads a column that is a **foreign key**, the value is the
+referenced row's RID, not its human-facing field — resolve it. And: mocks that
+guess the catalog's return shape are worth less than one live round-trip;
+gate the mock's value on what ERMrest actually returns. Keep the live test in
+the suite precisely because it is the only thing that exercises real FK
+semantics.
+
+<a id="tk-022"></a>
+### tk-022 — A second `/codex` pass on the consumed-version fix found a real perf issue (full-table scan per lineage node) AND a latent guard gap (self-parent via the *version-producer*, not just member-producers)
+**When:** 2026-06-27T00:30:00-07:00
+**By:** Carl Kesselman (carl@isi.edu)
+**Supported by:** [tk-020](#tk-020) (the fix this audits), [tk-021](#tk-021)
+
+A second `/codex` review — one diff-gate pass + one test-completeness consult —
+of the merged consumed-version fix ([tk-020], deriva-ml `b0d5d6cb`) surfaced two
+things our SDD review chain (including the first codex pass) missed:
+
+**1. Performance [P2] — `list_input_datasets_with_versions` full-table scans
+`Dataset_Version` on every lineage node.** To resolve the FK RID→version string,
+the helper fetches the ENTIRE `Dataset_Version` table once per call. But
+`_walk_node` calls it for every walked execution, so a deep `lookup_lineage` walk
+is O(walked-executions × total-dataset-versions). On a real catalog with many
+versions this can be slow or hit ERMrest response limits. The fix is the one the
+plan's own fallback described: collect the non-null `Dataset_Version` RIDs from
+the input edges and fetch ONLY those (chunked, like the member-producer query),
+returning early when there are none. (The single-fetch map was accepted as
+"simplest and correct" — it is correct but not scalable; scale is the "reason
+not to" the plan named.)
+
+**2. Latent guard gap [P1, confirmed real by code-trace] — the self-parent
+subtraction covers member-producers but NOT the version-producer.** In
+`_walk_node` (`execution.py:1629-1638`), the consumed dataset's member-producers
+are added as `member_producers - {execution_rid}` (the self-parent guard from
+[tk-020]), but the dataset's *version-producer* — `_producer_of_dataset(ds, version=…)`
+at line 1631 — is added with NO such subtraction. Traced: if an execution both
+**consumed** dataset D and **produced the consumed version** of D (a real
+pattern: consume D, add members, re-version D in one run), `_producer_of_dataset`
+returns `execution_rid`; the recursion re-enters `_walk_node(execution_rid)`,
+finds it `in_progress` (line 1554), and sets `cycle_detected = True` — a **false
+cycle**, exactly what the member guard prevents. It was untested because no test
+made the consuming execution also the version-producer.
+
+**Decision (chosen):** follow-up branch that (a) fixes the perf scan
+(consumed-RID-only fetch), (b) extends the self-parent guard to the
+version-producer (`if producer and producer != execution_rid`), and (c) adds the
+test cluster codex named: self-parent-via-version-producer, missing-FK-RID
+fallback, mixed pinned/unpinned inputs, the `_input_dataset_pairs` real-seam wire
+(only the live test covered it), and multi-dataset-different-versions through the
+walk.
+
+**RESOLVED (2026-06-27):** implemented in deriva-ml (merged `9b5f0db5`, final
+review READY-TO-MERGE) — `list_input_datasets_with_versions` now does a chunked
+`.in_()` fetch of only the consumed-version RIDs (`_VERSION_RID_CHUNK=500`,
+skip-when-unpinned), and `_walk_node` guards the version-producer add with
+`producer != execution_rid`. The bug-proving test fails on reversion; the
+bounded-fetch mock is structurally regress-proof; the live consumed-version test
+still passes (bounded fetch resolves the consumed RID). This completes the
+lineage arc (tk-018 → tk-020 → tk-021 → tk-022); deriva-ml main is bug-free
+across all three lineage branches and was released.
+
+Lesson: **run codex twice** — the first pass (pre-merge) caught the original
+consumed-version gap; the second pass (post-merge, test-completeness-focused)
+caught both a perf cliff and a guard the first pass and our own review left
+half-applied. A guard added on one of two symmetric code paths (member-producers)
+is a smell to check the other path (the version-producer) — symmetry gaps hide
+latent bugs.
