@@ -286,9 +286,14 @@ def stage_source(
     cache_root.mkdir(parents=True)
 
     archive_path = download_cifar10_archive()  # DOMAIN: replace for your data
-    train_dir, test_dir, labels = extract_cifar10_to_png(
-        archive_path, cache_root / "_extract"
-    )
+
+    # Extract into a subdirectory of cache_root so symlink targets stay
+    # alive for the lifetime of the cache.  The ``_extract/`` dir and the
+    # ``train/``/``test/`` symlink dirs are both under cache_root; the
+    # entire tree is cleared atomically by ``shutil.rmtree(cache_root)``
+    # at the top of the next call — no stale targets accumulate.
+    extract_root = cache_root / "_extract"
+    train_dir, test_dir, labels = extract_cifar10_to_png(archive_path, extract_root)
 
     # Class-balanced sampling — split max_images evenly between splits.  # DOMAIN: replace for your data
     if max_images is not None:
@@ -308,22 +313,19 @@ def stage_source(
     )
 
     # Symlink the sampled subset into cache_root/train + cache_root/test.
+    # Targets live in cache_root/_extract/{train,test}/ — same tree, so
+    # the symlinks remain valid as long as cache_root is intact.
     for split, paths in (("train", train_paths), ("test", test_paths)):
         sub = cache_root / split
         sub.mkdir(parents=True, exist_ok=True)
         for img_path in paths:
-            (sub / img_path.name).symlink_to(img_path)
+            (sub / img_path.name).symlink_to(img_path.resolve())
 
     # Write labels only for the sampled files (stem -> class).
     sampled_labels = {
         p.stem: labels[p.stem] for p in train_paths + test_paths if p.stem in labels
     }
     write_labels_manifest(cache_root, sampled_labels)  # DOMAIN: replace for your data
-
-    # Clean up the temporary extraction directory.
-    extract_dir = cache_root / "_extract"
-    if extract_dir.exists():
-        shutil.rmtree(extract_dir)
 
     logger.info(
         "Staged %d train + %d test source images to %s",
