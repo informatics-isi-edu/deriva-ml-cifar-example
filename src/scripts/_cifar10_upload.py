@@ -298,7 +298,18 @@ def run_upload_phase(
     )
     config = ExecutionConfiguration(
         workflow=workflow,
-        datasets=[DatasetSpec(rid=source_dataset_rid, version=source_version)],
+        # materialize=False: consume the File dataset as an Input for lineage
+        # WITHOUT fetching member bytes into a bag.  The files are by-reference
+        # (local tag:// URLs), which bag materialization cannot fetch — it would
+        # raise BagValidationError.  We only need the File rows' URLs (table
+        # metadata) to resolve the local paths ourselves.  See tk-015.
+        datasets=[
+            DatasetSpec(
+                rid=source_dataset_rid,
+                version=source_version,
+                materialize=False,
+            )
+        ],
     )
 
     train_count = 0

@@ -585,3 +585,34 @@ treat **`URL` as the source of truth for identity/name**; do NOT rely on
 `Filename` (it is NULL for by-reference files). Guard any `.endswith`/string op
 with `(rec.get("Filename") or "")` if you must touch it, but prefer deriving the
 name from `URL`.
+
+<a id="tk-015"></a>
+### tk-015 — Consuming a by-reference File dataset as an execution Input must use `DatasetSpec(materialize=False)` — bag materialization can't fetch `tag://` local URLs
+**When:** 2026-06-26T19:30:00-07:00
+**By:** Carl Kesselman (carl@isi.edu)
+**Supported by:** [tk-011](#tk-011) (the lineage fix that requires consuming the File dataset as Input), [tk-014](#tk-014) (same upload phase)
+
+The two-execution upload phase consumes the source File dataset as an Input so
+that lineage connects (image dataset → upload exec → source files). But
+`create_execution` **materializes every input dataset as a BDBag by default**,
+and bag materialization *validates by fetching each member's bytes from its URL*.
+Our File rows carry `tag://host,date:file:///…/cache/…/*.png` URLs (local,
+by-reference — see [tk-005](#tk-005)). The bag fetcher can't retrieve `tag://`
+local files: it looks in the bag-cache dir, finds nothing, and
+`bdbag` raises `BagValidationError: Bag validation failed` on all ~2,000 members.
+So the very mechanism that makes lineage connect (consume-as-Input) also triggers
+a byte-fetch the by-reference design can't satisfy.
+
+Fix: pass **`DatasetSpec(rid=…, version=…, materialize=False)`** for the consumed
+File dataset. `materialize=False` downloads only the **table metadata** (the File
+rows + their URLs) — no asset byte-fetch, no bag validation. That is exactly what
+the upload phase needs: it reads the File records' URLs, resolves the `tag://`
+paths to the local cache itself, and uploads from there. The Input edge (and thus
+the lineage) is still recorded; only the (impossible) byte-fetch is skipped.
+
+Implications for collaborators: any execution that consumes a **by-reference**
+File dataset (one registered via `add_files` with local `tag://` URLs) as an
+input MUST set `materialize=False` on its `DatasetSpec`. The default `True` will
+fail bag validation. This is a general constraint on by-reference datasets, not
+CIFAR-specific. (Hatrac-backed asset datasets materialize fine; the limitation is
+specific to local/`tag://`-referenced files.)
