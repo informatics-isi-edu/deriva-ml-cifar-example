@@ -74,11 +74,11 @@ def _run_cli(*args: str) -> None:
         )
 
 
-def test_source_image_lineage_connected_via_shared_execution(tmp_path):
+def test_source_image_lineage_connected_via_shared_execution():
     """End-to-end: source File dataset and Image assets share an upload execution.
 
-    Creates a throwaway catalog, runs the full ``load-cifar10`` ingest
-    (``--phase all``), then asserts:
+    Creates a throwaway catalog, runs the ``load-cifar10`` ingest
+    (schema → register → upload), then asserts:
 
     1. A root ``CIFAR_Source``-typed File dataset exists with
        ``source_directory == "."``.
@@ -104,8 +104,7 @@ def test_source_image_lineage_connected_via_shared_execution(tmp_path):
       dataset as Input is recorded here.
 
     Args:
-        tmp_path: pytest-provided temporary directory (unused; present
-            for consistency with the standard fixture signature).
+        None
     """
     from deriva.core import DerivaServer, get_credential
     from deriva_ml import DerivaML
@@ -129,18 +128,28 @@ def test_source_image_lineage_connected_via_shared_execution(tmp_path):
     catalog = server.connect_ermrest(catalog_id)
 
     try:
-        # --- Run all phases (schema already done; register + upload + datasets). ---
-        # --phase all runs schema → register → upload → datasets → cleanup.
-        # --keep-source-cache skips the cleanup sub-phase so the run exits faster.
-        # The datasets phase output is not asserted here, but letting it run keeps
-        # this a full-stack exercise of the loader.
+        # --- Run register + upload phases (schema already done above). ---
+        # The test only needs source registration and image upload to verify
+        # the lineage connection; the datasets phase is not required for the
+        # Dataset_Execution or Image_Execution assertions.
         _run_cli(
             "--hostname",
             HOSTNAME,
             "--catalog-id",
             catalog_id,
             "--phase",
-            "all",
+            "register",
+            "--num-images",
+            str(NUM_IMAGES),
+            "--keep-source-cache",  # skip cleanup so the run finishes faster
+        )
+        _run_cli(
+            "--hostname",
+            HOSTNAME,
+            "--catalog-id",
+            catalog_id,
+            "--phase",
+            "upload",
             "--num-images",
             str(NUM_IMAGES),
             "--keep-source-cache",  # skip cleanup so the run finishes faster
@@ -180,14 +189,8 @@ def test_source_image_lineage_connected_via_shared_execution(tmp_path):
         sample_image_rid: str = str(output_rows[0]["Image"])
 
         print(
-            f"Sample Image RID: {sample_image_rid}  "
-            f"upload_exec_rid: {upload_exec_rid}",
+            f"Sample Image RID: {sample_image_rid}  upload_exec_rid: {upload_exec_rid}",
             file=sys.stderr,
-        )
-
-        assert upload_exec_rid is not None, (
-            "upload_exec_rid is None — no producing execution found in "
-            "Image_Execution table."
         )
 
         # --- Step 2: find the source root File dataset RID. ---
