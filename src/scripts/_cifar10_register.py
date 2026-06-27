@@ -137,7 +137,7 @@ def stratified_sample_by_class(
         items: Candidate image paths. Items whose stem is missing from
             ``labels`` are skipped.
         labels: Mapping of ``image_stem -> class_name`` (the same
-            mapping returned by :func:`extract_cifar10_to_png`).
+            mapping returned by :func:`extract_cifar10_sample_to_png`).
         sample_size: How many paths to return. If ``None`` or larger
             than ``len(items)``, returns all known-class items shuffled
             deterministically.

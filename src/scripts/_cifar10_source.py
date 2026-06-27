@@ -17,7 +17,6 @@ import csv
 import logging
 import pickle
 import random
-import shutil
 import tarfile
 import tempfile
 import urllib.request
@@ -91,77 +90,6 @@ def load_batch(batch_path: Path) -> tuple[np.ndarray, list[int], list[str]]:
     labels = list(batch[b"labels"])
     filenames = [fn.decode("utf-8") for fn in batch[b"filenames"]]
     return images, labels, filenames
-
-
-def extract_cifar10_to_png(
-    archive_path: Path, output_dir: Path
-) -> tuple[Path, Path, dict[str, str]]:
-    """Extract the CIFAR-10 archive into a train/test PNG layout.
-
-    Writes images as PNG files under ``output_dir/train/`` and
-    ``output_dir/test/``, named to match the original CIFAR-10
-    filenames (without re-numbering). Returns a labels mapping
-    keyed by filename stem (no extension).
-
-    Args:
-        archive_path: Path to ``cifar-10-python.tar.gz``.
-        output_dir: Directory to write ``train/`` and ``test/`` into.
-            Created if it doesn't exist. A ``_extract/`` scratch
-            subdirectory is created inside ``output_dir`` during
-            processing and removed at the end; any pre-existing
-            ``_extract/`` inside ``output_dir`` is deleted on entry.
-
-    Returns:
-        Tuple of ``(train_dir, test_dir, labels)`` where ``labels`` is
-        a mapping of ``filename_stem -> class_name`` for *all* images
-        (both train and test — the Toronto distribution labels both).
-
-    Example:
-        >>> train, test, labels = extract_cifar10_to_png(
-        ...     Path("cifar-10-python.tar.gz"), Path("./out")
-        ... )
-        >>> labels["frog_42"]
-        'frog'
-    """
-    output_dir.mkdir(parents=True, exist_ok=True)
-    train_dir = output_dir / "train"
-    test_dir = output_dir / "test"
-    train_dir.mkdir(exist_ok=True)
-    test_dir.mkdir(exist_ok=True)
-
-    # Extract archive to a working subdir.
-    extract_root = output_dir / "_extract"
-    if extract_root.exists():
-        shutil.rmtree(extract_root)
-    extract_root.mkdir()
-    with tarfile.open(archive_path, "r:gz") as tar:
-        tar.extractall(extract_root, filter="data")
-    batches_dir = extract_root / "cifar-10-batches-py"
-
-    # Load class names from batches.meta.
-    with (batches_dir / "batches.meta").open("rb") as fh:
-        meta = pickle.load(fh, encoding="bytes")
-    class_names = [name.decode("utf-8") for name in meta[b"label_names"]]
-
-    labels: dict[str, str] = {}
-    train_batches = sorted(batches_dir.glob("data_batch_*"))
-    for batch_path in train_batches:
-        images, lbl_ints, filenames = load_batch(batch_path)
-        for img, lbl, fname in zip(images, lbl_ints, filenames):
-            out_path = train_dir / fname
-            Image.fromarray(img).save(out_path)
-            labels[Path(fname).stem] = class_names[lbl]
-
-    images, lbl_ints, filenames = load_batch(batches_dir / "test_batch")
-    for img, lbl, fname in zip(images, lbl_ints, filenames):
-        out_path = test_dir / fname
-        Image.fromarray(img).save(out_path)
-        labels[Path(fname).stem] = class_names[lbl]
-
-    # Clean up the temporary extraction directory.
-    shutil.rmtree(extract_root)
-
-    return train_dir, test_dir, labels
 
 
 def _stratified_pick(

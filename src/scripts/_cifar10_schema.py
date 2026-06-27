@@ -21,12 +21,13 @@ Public API:
       (existing or fresh).
     - ``setup_domain_model(ml)`` — install Image table,
       Image_Class vocab, Image_Classification feature.
-    - ``setup_workflow_types(ml)`` — register the three
+    - ``setup_workflow_types(ml)`` — register the six
       workflow types we use (CIFAR_Data_Load, Image
-      Classification, ROC Analysis Notebook).
-    - ``setup_dataset_types(ml)`` — register the six dataset
+      Classification, ROC Analysis Notebook, Dataset_Split,
+      CIFAR_Source_Registration, CIFAR_Image_Upload).
+    - ``setup_dataset_types(ml)`` — register the seven dataset
       types (Complete, Training, Testing, Split, Labeled,
-      Unlabeled).
+      Unlabeled, CIFAR_Source).
     - ``apply_annotations(ml, project_name)`` — Chaise navbar
       branding.
     - ``run_schema_phase(ml, project_name)`` — orchestrator
