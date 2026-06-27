@@ -380,6 +380,19 @@ def setup_workflow_types(ml: DerivaML) -> None:
             ),
         )
 
+    if "CIFAR_Image_Upload" not in existing_types:
+        logger.info("Creating CIFAR_Image_Upload workflow type...")
+        ml.add_term(
+            table="Workflow_Type",
+            term_name="CIFAR_Image_Upload",
+            description=(
+                "Execution 2 of the two-execution CIFAR ingest: consume the "
+                "registered File dataset as Input, resolve each tag-URL to its "
+                "local cache path, upload bytes as Image assets, and add "
+                "Image_Classification feature rows."
+            ),
+        )
+
 
 def setup_dataset_types(ml: DerivaML) -> None:
     """Ensure required dataset types exist in Dataset_Type vocabulary.

@@ -1,0 +1,293 @@
+"""CIFAR-10 Execution 2: upload Image assets from the registered File dataset.
+
+This module demonstrates the **file-dataset consumption + upload pattern**:
+how to consume a previously registered File dataset as an execution *Input*,
+resolve each registered file's tag-URL to a local filesystem path, upload
+the image bytes as ``Image`` assets, and add ``Image_Classification``
+feature rows — all with clean lineage back to the source File dataset
+produced by Execution 1 (``_cifar10_register.run_register_phase``).
+
+The two-execution design is the key pattern to copy:
+
+- **Execution 1** (``_cifar10_register``) registers source bytes as a
+  durable File dataset (provenance only — no upload).
+- **Execution 2** (this module) *consumes* that File dataset as an
+  Input, reads the manifest for labels, and actually uploads the bytes
+  as ``Image`` assets.
+
+This split gives separate provenance records for "which files were
+ingested" vs. "what pixel data ended up in the catalog", and the
+catalog's lineage graph links source→images automatically.
+
+Public API:
+    - ``tag_url_to_path(url: str) -> Path`` — pure resolver that turns a
+      deriva-ml tag URL (``tag://host,date:file:///abs/path``) into a
+      ``Path``.
+    - ``read_labels_manifest(path: Path) -> dict[str, str]`` — pure
+      reader that turns a ``labels.csv`` (written by
+      :func:`scripts._cifar10_source.write_labels_manifest`) into a
+      ``{filename: class}`` dict keyed by ``<stem>.png``.
+    - ``run_upload_phase(ml, source_dataset_rid) -> dict`` — Execution 2
+      orchestrator: consume the File dataset, upload Image assets, add
+      ``Image_Classification`` features, return stats.
+"""
+
+from __future__ import annotations
+
+import csv
+import logging
+from pathlib import Path
+from urllib.parse import urlsplit
+from typing import Any
+
+from deriva_ml import DerivaML
+from deriva_ml.dataset.aux_classes import DatasetSpec
+from deriva_ml.execution import ExecutionConfiguration
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Pure helpers (no catalog/network)
+# ---------------------------------------------------------------------------
+
+
+def tag_url_to_path(url: str) -> Path:
+    """Resolve a deriva-ml tag URL to its local filesystem path.
+
+    Parses ``tag://<host>,<date>:file:///abs/path`` and returns the
+    ``Path`` object for the file portion.  The ``file://`` segment
+    follows the first ``:file://`` occurrence in the URL, so the tag
+    authority (host and date) is stripped cleanly.
+
+    Args:
+        url: A tag URL of the form
+            ``tag://HostA,2026-06-25:file:///var/cache/img.png``.
+
+    Returns:
+        ``Path`` object for the absolute local filesystem path.
+
+    Example:
+        >>> tag_url_to_path(
+        ...     "tag://HostA,2026-06-25:file:///var/cache/img.png"
+        ... ).as_posix()
+        '/var/cache/img.png'
+    """
+    file_part = url.split(":file://", 1)[1]
+    return Path(urlsplit("file://" + file_part).path)
+
+
+def read_labels_manifest(path: Path) -> dict[str, str]:
+    """Read a ``labels.csv`` manifest into a filename→class dict.
+
+    Inverse of :func:`scripts._cifar10_source.write_labels_manifest`.
+    The CSV has a ``filename,class`` header; each row is
+    ``<stem>.png,<class>``.
+
+    Args:
+        path: Path to the ``labels.csv`` file.
+
+    Returns:
+        Dict mapping ``"<stem>.png"`` to class name, e.g.
+        ``{"cat_2.png": "cat", "dog_3.png": "dog"}``.
+
+    Example:
+        >>> from pathlib import Path
+        >>> m = read_labels_manifest(Path("/cache/cifar10_source/labels.csv"))
+        ... # doctest: +SKIP
+        >>> m["cat_2.png"]  # doctest: +SKIP
+        'cat'
+    """
+    with path.open(newline="") as fh:
+        reader = csv.DictReader(fh)
+        return {row["filename"]: row["class"] for row in reader}
+
+
+# ---------------------------------------------------------------------------
+# Execution 2 orchestrator
+# ---------------------------------------------------------------------------
+
+
+def run_upload_phase(
+    ml: DerivaML,
+    source_dataset_rid: str,
+) -> dict[str, Any]:
+    """Execution 2 — consume the File dataset, upload Images, add features.
+
+    Creates a ``CIFAR_Image_Upload`` workflow execution that consumes the
+    root File dataset from Execution 1 as an *Input*.  For each
+    partition child (``train`` / ``test``) it walks the registered File
+    members, resolves each tag-URL to a local cache path, and stages the
+    image bytes as an ``Image`` asset via
+    :meth:`Execution.asset_file_path`.  After the execution context
+    exits, assets are committed to Hatrac via
+    :meth:`Execution.commit_output_assets`.  Finally, a second small
+    execution adds ``Image_Classification`` feature rows for every
+    uploaded image.
+
+    Lines marked ``# DOMAIN: replace for your data`` are the seams to
+    edit when adapting this scaffold to a different dataset.
+
+    Args:
+        ml: Connected DerivaML instance with the schema already set up.
+        source_dataset_rid: RID of the root File dataset produced by
+            :func:`scripts._cifar10_register.run_register_phase`.
+
+    Returns:
+        Stats dict with keys ``total_images``, ``training_images``,
+        ``testing_images``, ``upload_execution_rid``,
+        ``feature_execution_rid``, ``features_added``,
+        ``images_skipped``.
+
+    Example:
+        >>> ml = DerivaML(hostname="localhost", catalog_id="42")
+        ... # doctest: +SKIP
+        >>> stats = run_upload_phase(ml, source_dataset_rid="2-WXYZ")
+        ... # doctest: +SKIP
+        >>> stats["total_images"]  # doctest: +SKIP
+        100
+    """
+    # ------------------------------------------------------------------
+    # Look up the source File dataset so we can get its current version
+    # for the DatasetSpec (required by ExecutionConfiguration).
+    # ------------------------------------------------------------------
+    source_ds = ml.lookup_dataset(source_dataset_rid)
+    source_version = str(source_ds.current_version)
+    logger.info(
+        "Consuming source File dataset %s @ %s", source_dataset_rid, source_version
+    )
+
+    # ------------------------------------------------------------------
+    # Execution 2a: upload Image assets
+    # ------------------------------------------------------------------
+    workflow = ml.create_workflow(
+        name="CIFAR-10 Image Upload",  # DOMAIN: replace for your data
+        workflow_type="CIFAR_Image_Upload",  # DOMAIN: replace for your data
+        description=(
+            "Execution 2: consume the registered File dataset as Input and "
+            "upload each source image as an Image asset."
+        ),
+    )
+    config = ExecutionConfiguration(
+        workflow=workflow,
+        datasets=[DatasetSpec(rid=source_dataset_rid, version=source_version)],
+    )
+
+    train_count = 0
+    test_count = 0
+
+    # Read the labels manifest from the root File dataset's labels.csv member.
+    # The root dataset (source_directory ".") holds labels.csv; partition
+    # children (source_directory "train" / "test") hold the images.
+    root_members = source_ds.list_dataset_members()
+    file_records = root_members.get("File", [])  # DOMAIN: replace for your data
+    labels_record = next(
+        (r for r in file_records if r.get("Filename", "").endswith("labels.csv")),
+        None,
+    )
+    if labels_record is None:
+        raise RuntimeError(
+            f"labels.csv not found in root File dataset {source_dataset_rid}. "
+            "Run run_register_phase first."
+        )
+    labels_path = tag_url_to_path(labels_record["URL"])  # DOMAIN: replace for your data
+    logger.info("Reading labels manifest from %s", labels_path)
+    labels = read_labels_manifest(labels_path)  # DOMAIN: replace for your data
+    logger.info("Loaded %d label entries from manifest", len(labels))
+
+    # Walk the partition children (train / test).
+    partition_children = [
+        child
+        for child in source_ds.list_dataset_children()
+        if child.is_directory
+        and child.source_directory in {"train", "test"}  # DOMAIN: replace for your data
+    ]
+
+    with ml.create_execution(config) as exe:
+        logger.info("Upload execution RID: %s", exe.execution_rid)
+        upload_execution_rid = exe.execution_rid
+
+        for child in partition_children:
+            partition = child.source_directory  # "train" or "test"  # DOMAIN
+            child_members = child.list_dataset_members()
+            image_records = child_members.get("File", [])  # DOMAIN
+            logger.info(
+                "  Partition %r: %d File records", partition, len(image_records)
+            )
+
+            for file_rec in image_records:
+                url: str = file_rec["URL"]  # DOMAIN: tag URL field name
+                filename: str = file_rec["Filename"]  # DOMAIN: filename field name
+
+                # Skip the labels manifest if it somehow appears in a child.
+                if filename.endswith("labels.csv"):
+                    continue
+
+                local_path = tag_url_to_path(url)  # DOMAIN
+                stem = local_path.stem  # e.g. "cat_2"
+                cls = labels.get(filename)  # DOMAIN: look up by full filename
+                if cls is None:
+                    # Fall back to stem lookup in case manifest uses stems.
+                    cls = labels.get(f"{stem}.png")
+                if cls is None:
+                    logger.warning(
+                        "No label for %r (stem=%r), skipping", filename, stem
+                    )
+                    continue
+
+                # Rename: <partition>_<class>_<original_stem>.png
+                # DOMAIN: adjust rename convention for your dataset.
+                rename = f"{partition}_{cls}_{stem}.png"
+                exe.asset_file_path(
+                    asset_name="Image",  # DOMAIN: asset table name
+                    file_name=str(local_path),
+                    asset_types=["Image"],  # DOMAIN
+                    copy_file=True,
+                    rename_file=rename,
+                )
+
+                if partition == "train":
+                    train_count += 1
+                else:
+                    test_count += 1
+
+                if (train_count + test_count) % 1000 == 0:
+                    logger.info(
+                        "  Registered %d images so far...", train_count + test_count
+                    )
+
+        logger.info(
+            "  Total staged: %d train + %d test = %d",
+            train_count,
+            test_count,
+            train_count + test_count,
+        )
+
+    # Commit image assets to Hatrac after the execution context exits.
+    logger.info("Committing Image assets to Hatrac...")
+    exe.commit_output_assets(clean_folder=True)
+    logger.info("  Upload complete.")
+
+    # ------------------------------------------------------------------
+    # Execution 2b: add Image_Classification feature rows
+    # ------------------------------------------------------------------
+    from scripts._cifar10_assets import add_classification_features  # DOMAIN: see below
+
+    # ``add_classification_features`` reads back all Image rows from the
+    # catalog and derives the class from the uploaded filename
+    # (``train_<class>_<stem>.png`` convention) — no in-memory state
+    # crosses the execution boundary.  DOMAIN: replace with your own
+    # feature-labeling logic when adapting this scaffold.
+    feature_stats = add_classification_features(ml)
+    logger.info(
+        "  Added %d Image_Classification features", feature_stats["features_added"]
+    )
+
+    return {
+        "total_images": train_count + test_count,
+        "training_images": train_count,
+        "testing_images": test_count,
+        "upload_execution_rid": upload_execution_rid,
+        "feature_execution_rid": feature_stats["execution_rid"],
+        "features_added": feature_stats["features_added"],
+        "images_skipped": feature_stats["images_skipped"],
+    }
